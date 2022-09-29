@@ -1,0 +1,1136 @@
+---
+title: "Entrega 1. MACHINE LEARNING [21/22]"
+subtitle: "Máster en Bioinformática. Universidad de Murcia"
+author: "María Belén Barquero Martínez"
+linkcolor: blue
+urlcolor: blue
+date: '\today'
+bibliography: bibliografia.bib
+output: 
+  html_document:
+    fig_caption: yes
+    df_print: paged
+    highlight: kate
+    number_sections: yes
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+---
+
+# Introducción
+En genética se denomina **región no traducida** o **UTR** a los sectores extremos de los genes. Generalmente se habla de dos extremos: **región no traducida cinco prima** (**5'-UTR**) y **región no traducida tres prima** (**3'-UTR**). Estas dos regiones están presentes en los genes y corresponden a las dos partes no traducidas de estos, debido a que se encuentran en los extremos de los marcos abiertos de lectura u ORFs, formados por exones e intrones, como se puede apreciar en la Figura expuesta a continuación, que muestra el paso del RNA inmaduro (primera figura) a maduro (segunda figura).
+
+![Paso de mRNA inmaduro a mRNA maduro](figura1.png)
+
+Pese a que estos extremos son las partes no codificantes de los mRNA, las regiones 3'-UTR poseen una gran importancia en la regulación de la expresión génica, ya que se sabe que estas regiones determinan el destino de las proteínas mediante la regulación de las interacciones proteína-proteína [@mayr2017regulation]. Es conocido que hay proteínas adaptadoras que reconocen secuencias específicas no codificantes del 3'-UTR, así como también que estas regiones están implicadas en la correcta expresión espacial y temporal de los genes. 
+
+También se sabe que estas secuencias 3'-UTR  facilitan la formación de complejos proteicos cotraduccionales [@mayr2017regulation], lo que establece un papel para los 3'-UTR como **operones eucariotas evolucionados**. Mientras que los operones bacterianos promueven la interacción de dos subunidades, las 3'-UTR permiten la formación de complejos proteicos con composiciones diversas.
+
+En general, **las regiones 3'-UTR parecen ser importantes en la regulación de genes que involucran funciones locales, compartimentación y cooperatividad**, lo que las convierte en herramientas importantes para la regulación de la diversidad fenotípica de organismos superiores [@mayr2017regulation]. Saber identificar estas regiones puede resultar beneficioso para entender mejor cómo funcionan determinados genes de los que todavía no se sabe mucho sobre su modo de actuación y para el estudio de enfermedades, ya que se sabe que, por ejemplo, la estabilidad del mRNA mediado por la región 3' no traducida (3'-UTR) desempeña un papel crucial en el cambio de la expresión génica en la fisiopatología cardiovascular [@misquitta2001role].
+
+En este trabajado se va a intentar, mediante técnicas básicas de estadística para asociación de variables y técnicas de *machine learning* para elaboración de modelos, **identificar regiones 3'-UTRs en el genoma humano**. 
+
+# Objetivos 
+
+El objetivo principal del estudio a partir de los datos que se van a tratar es lograr saber **si es posible distinguir 3'UTRs de entre cualquier tipo de región que se pueda introducir en el modelo a partir de su especificación mediante las 41 características genómicas y transcriptómicas que presentan los datos**.
+
+# Metodología de trabajo
+
+Este estudio se va a dividir en dos partes: 
+
+* La **primera parte** del estudio va a corresponder a la **preparación de datos**. Se va a proceder a la **organización**, **descripción de los datos** y **selección de variables**, con el objetivo de seleccionar solo aquellas que sean relevantes para el estudio. El objetivo de esta entrega es preparar los datos para la segunda parte del estudio.
+
+* La **segunda parte** del estudio corresponde a la **obtención de los modelos de machine learning que van a hacer posible en principio responder a la pregunta de si es posible identificar 3’ UTRS en el genoma humano**.
+
+Esta entrega corresponde a la **primera parte del estudio**.
+
+# Pasos previos
+
+## Espacio de trabajo
+Para llevar a cabo la realización de este estudio, lo primero que se va a hacer es especificar el espacio de trabajo. El trabajo se va a realizar en dayhoff, el clúster que se encuentra a disposición de los estudiantes del máster en bioinformática de la Universidad de Murcia, creando para ello un directorio llamado `entrega1` para alojar este archivo R.Markdown así como los datos utilizados en el estudio y los archivos rds que se vayan generando.
+
+```{r}
+set.seed(123)
+# Espacio de trabajo
+setwd("/home/alumno02/entrega1")
+```
+
+```{r, warning=FALSE, cache=FALSE, include=FALSE}
+
+.libPaths("/home/alumno02/R/x86_64-pc-linux-gnu-library/4.0")
+
+# Librerías necesarias para el desarrollo del trabajo
+library(knitr)
+library(caret)
+library(dplyr)
+library(kableExtra)
+library(ggcorrplot)
+library(ggplot2)
+library(reshape)
+library(dplyr)
+library(corrplot)
+library(caret)
+library(psych)
+library(MASS)
+library(tidyverse)
+library(foreach)
+library(iterators)
+library(doParallel)
+library(DT)
+library(Epi)
+library(nortest)
+library(gridExtra)
+library(tidyverse)
+library(FactoMineR)
+library(factoextra)
+library(umap)
+library(venn)
+
+knitr.table.format = "html"
+```
+
+## Obtención de los datos
+Los datos para la realización de este estudio se han obtenido a través del aula virtual de la asignatura bajo el nombre de `dataPracticaML21_22.rds`, pero su extracción se realizó previamente del artículo [@sethi2021leveraging], al que se puede acceder a través de esta [url](https://www.biorxiv.org/content/10.1101/2021.03.08.434412v1.full).
+
+Estos datos van a ser cargados y asociados al nombre de una variable.
+
+```{r}
+# Asociación del fichero de datos 'dataPracticaML21_22.rds' a la variable 'data'
+data <- readRDS("dataPracticaML21_22.rds")
+```
+
+# Desarrollo - Primera entrega
+
+En esta primera entrega se va a proceder a realizar un **análisis exploratorio de los datos** con el fin de comprobar algunas propiedades respecto a ellos. A continuación, se muestra una lista con las principales incógnitas a resolver en este apartado:
+
+ * Se comprobará la **existencia de valores nulos en los datos**, así como otros tipos de valores no válidos para el estudio, y en el caso de detectar su presencia, se procederá a ver cómo se tratan.
+ * Se observará del **tipo de datos del que se dispone y si los datos se encuentran balenceados o no**, es decir: si se encuentra presencia de clases mayoritarias y minoritarias, y se verá cómo tratar el problema dependiendo de esto.
+ * Se comprobará la **existencia o no de correlación entre predictores**, y qué utilidad tiene esto en el estudio.
+ * Se estudiará la **presencia de asociaciones lineales entre los distintos predictores y alguno de los tipos de regiones presentes ('class')**.
+ * Se estudiará también si se distribuyen con **normalidad** aquellas variables que a priori se identifiquen como interesantes por su relación con la variable de clase y qué dice un **análisis no supervisado** de la separabilidad de las regiones presentes en los datos.
+ 
+Tras esto, se va a proceder a realizar una **selección de variables** con el objetivo de dejar los datos preparados para la segunda entrega, que consta de la obtención de los modelos de machine learning que permitan identificar refiones 3'-UTR.
+ 
+## Información de naturaleza exploratoria de los datos
+
+### Exploración principal de los datos
+
+Si se analiza el frame de datos del que se dispone se podrá comprobar que es un archivo rds compuesto por 179968 filas y por 42 columnas. Si se procede a la visualización los datos se observará que de esas 42 columnas:
+
+ * 41 son predictores.
+ * 1, una variable de clase. 
+
+Dicha variable de clase corresponde a la última columna, de nombre 'class', y hace referencia a la región que corresponde a cada uno de los datos, pudiendo ser dichas clases/regiones: 5’UTRs, 3’UTRs, *long non coding RNAs*, *non coding RNAs*, pseudogenes e *internal coding exons*. 
+
+A continuación se comprobará que las variables tienen asignados correctamente el tipo de dato al que pertenecen. 
+
+Este dataset cuenta con **40 variables numéricas y 2 factores**. Uno de los factores es la variable de clase de la que se ha hablado anteriormente, y la otra es la variable 'polyA_signal', que tiene dos niveles (0, 1), y que determinan la no presencia o presencia del mismo respectivamente.
+
+A continuación se visualirazará el número de datos asociados a cada tipo:
+
+```{r}
+# Exploración principal de los datos
+str(data)
+
+# Número de filas y columnas de los datos
+dim(data)
+```
+
+### Escalado de los datos
+
+A continuación se va a proceder a la comprobación de la **normalización y/o escalado de los datos**, es decir, se va a comprobar si los datos están en un mismo rango. Para ello se van a seleccionar las columnas [2:41], que son las numércias, y se va a realizar con ellas un boxplot:
+
+```{r, warning=FALSE}
+# Boxplot de las variables numéricas
+  ## Creación de una estructura de datos para plotear con facilidad filtrando sólo las variables numéricas
+mymelt <- melt.data.frame(data[,2:42], id = "class")
+
+  ## Representación con ggplot
+ggplot(data=mymelt, aes(x=variable, y=value, color=variable, fill=variable)) +
+  geom_boxplot(alpha=0.6) +
+  theme_bw() +
+  scale_fill_discrete() +
+  scale_color_discrete() +
+  ggtitle("Diagramas de cajas de los datos brutos") +
+  ylab("Valores") +
+  xlab("Variables") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  theme(text = element_text(size=6)) +
+  theme(plot.title=element_text(hjust=0.5, size=rel(1.5)), panel.grid = element_blank())
+```
+
+Como se puede comprobar en el boxplot anterior, **hay algunas variables que no están escaladas**, como por ejemplo, la variable 'meanPd', que es la primera a la izquierda del todo. También se observa que, siguiende un orden de izquierda a derecha, las variables 6, 8, 12, y 18 tampoco están escaladas.
+
+Queda justificada entonces la **realización de un proceso de escalado y centrado de datos**. La normalización va a transformar las características de forma que todas compartan un mismo valor medio y una misma desviación media.
+
+Para escalar y centrar las variables numéricas se va usar la función `preProcess` de `Caret`, función que se puede usar para muchas operaciones con predictores, incluidas las de centrado y escalado. 
+
+Tras esto, se volverán a representar las variables en un boxplot para comprobar si se ha producido de forma satisfactoria este proceso de escalado y centrado.
+
+```{r, warning=FALSE}
+# Boxplot de las variables numéricas escaladas y centradas
+  ## Se selecionan las variables numéricas y se escalan y centran los datos
+escalado_y_centrado <- preProcess(data[,2:41], method = c("center", "scale"))
+data_escalados <- predict(escalado_y_centrado,data[,2:41])
+my_melt_escalados <- melt.data.frame(data_escalados)
+
+  ## Representación con ggplot
+ggplot(data=my_melt_escalados, aes(x=variable, y=value, color=variable, fill=variable)) +
+  geom_boxplot(alpha=0.6) +
+  theme_bw() +
+  scale_fill_discrete() +
+  scale_color_discrete() +
+  ggtitle("Diagramas de cajas de los datos escalados y centrados") +
+  ylab("Valores") +
+  xlab("Variables") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  theme(text = element_text(size=6)) +
+  theme(plot.title=element_text(hjust=0.5, size=rel(1.5)), panel.grid = element_blank())
+```
+
+Como se puede comprobar, **las variables numéricas se han escalado y centrado**, pudiendo ser usadas ahora en futuros análisis del estudio.
+
+Se puede comprobar la presencia de valores atípicos en el caso de variables como 'meanEE' (*outliers* en valores negativos).
+
+```{r}
+data_escalado_numericas = readRDS("./data_escalados_variables_numericas.RDS")
+
+# Se añaden las variables factoriales
+data_escalado_completo <- cbind("polyA_signal"= data[,1], data_escalado_numericas,"class" = data[,42])
+data_escalado_completo = readRDS("./data_escalado_completo.RDS")
+```
+
+
+### Comprobación de valores nulos
+
+Se procederá a la comprobación de si **todos los valores son adecuados o si hay algún valor con el que no se pueda trabajar** en los análisis posteriores. Los tipos de datos no válidos son: NA (no disponibles), NaN (valores desconocidos), Inf (valores infinitos) o NULL (valores nulos):
+
+```{r, warning=FALSE}
+no_validas <- table(apply(data_escalado_completo, 2, function(x) any(is.na(x) | is.nan(x) | is.infinite(x) | is.null(x))))
+
+# Tabla de las columnas con valores no aptos para el estudio
+knitr::kable(no_validas, caption = "Columnas con valores no numéricos o ausentes",  col.names = c("Tipo", "Frecuencia")) %>%
+  kable_styling(bootstrap_options = "condensed")
+```
+
+Como se puede apreciar, ninguna de las columnas ha dado positivo en el test que comprueba la presencia de cualquiera de estos cuatro tipos de valores, por lo que se concreta la **no presencia de valores no adecuados en los datos** que se utilizan en este estudio.
+
+### Tipo de datos y presencia de balanceo en los datos
+
+Ahora se procederá a estudiar el **tipo de datos del que se dispone**, así como el **número de cada una de las clases** que hay presentes en los datos datos. 
+
+Como se puede apreciar a continuación, todas las columnas del archivo 'data' poseen el tipo de dato 'Numeric', mientras que se aprecia 2 únicas columnas que tienen como tipo de datos 'Factor', y estas columnas corresponden a la de 'class' y 'polyA_signal' si se visualiza el archivo de los datos. 
+
+No se va a analizar el factor 'polyA_signal' porque no aporta ningún tipo de información más allá de la presencia o no del mismo, por lo que no se va a usar para medir el balanceo/desbalanceo de los datos.
+
+Se procederá ahora a la **comprobación del desbalanceo en los datos**. Para ello hay que fijarse en la clasificación de las variables dependiendo de la clase en la que están:
+
+ * Si se observa la tabla que se forma como resultado de agrupar los datos por su variable de clase, así como en el barplot posterior, se puede comprobar el número de ellos que se encasillan en cada clase, comprobando la presencia de clases mayoritarias y minoritarias, como por ejemplo, "ICE", que presenta una frecuencia de 130768, y siendo esta la clase más mayoritaria, agrupándose en ella el 72% de las obvservaciones. Por el contrario, se cuenta solamente con 2146 datos agrupados en la clase de "pseudoGene" (0.12%), por lo que se puede concluir que claramente **hay un desbalanceo en los datos, ya que hay una serie de clases mayoritarias y otras que son bastante minoritarias**.
+ 
+
+```{r}
+# Clases del conjuntos de datos
+tipos <- table(sapply(data_escalado_completo, class))
+knitr::kable(tipos, caption = "Clase de datos de nuestro conjunto de datos", col.names = c("Tipo de dato", "Frecuencia")) %>%
+  kable_styling(bootstrap_options = "condensed")
+
+# Tabla con las clases presentes en los datos y el número de cada una de ellas
+tabla_clases <- table(data_escalado_completo$class)
+knitr::kable(tabla_clases, caption = "Número de datos agrupados por cada clase", col.names = c("Clases", "Frecuencia")) %>%
+  kable_styling(bootstrap_options = "condensed")
+
+# Frecuencia relativa de cada una de las clases 
+prop_clase <- prop.table(table(data_escalado_completo$class))
+knitr::kable(prop_clase, caption = "Proporción de cada clase", col.names = c("Clases", "Frecuencia relativa")) %>%
+  kable_styling(bootstrap_options = "condensed")
+
+# Barplots con proporción de clases
+barplot(prop_clase, col = palette("Pastel 2"), ylab ="Frecuencias Relativa", ylim = c(0, 1), main = "Distribución de Clases")
+```
+
+Este problema de desbalanceo en los datos va a hacer que en el conjunto de datos de entrenamiento se cuente con clases “minoritaria”, de las cuales contamos con menos muestras que en otras clases que se entienden como "mayoritarias". Esto va a provocar un desbalanceo en los datos que se utilizan para el entrenamiento. Este desbalanceo afecta a los algoritmos en su proceso de generalización de la información y perjudica a las clases minoritarias.
+
+Las estrategias para el manejo de datos desbalanceados se puede resumir en:
+
+* **Ajuste de Parámetros del modelo**: Consiste en ajustar parametros o métricas del propio algoritmo para intentar equilibrar a la clase minoritaria penalizando a la clase mayoritaria durante el entrenamiento. No se puede usar en todos los algoritmos.
+* **Modificar el Dataset:**: También se pueden eliminar muestras de la clase mayoritaria para reducirla e intentar equilibrar. Tiene como peligro el poder prescindir de muestras importantes, que brindan información y por lo tanto empeoran el modelo. También se podría agregar nuevas filas con los mismos valores de las clases minoritarias, pero esto en ocasiones no sirve demasiado y además podría llevar a nuestro modelo a caer en *overfitting*.
+* **Muestras artificiales**: Se puede intentar crear muestras sintéticas (no idénticas) utilizando diversos algoritmos que intenten seguir la tendencia del o de los grupos grupo minoritario. Según el método que utilicemos podemos mejorar los resultados o no. El peligro de este método es que se puede ver alterada la distribución normal de esa clase y confundir al modelo en su clasificación.
+* ***Balanced Ensemble Methods***: Consiste en entrenar diversos modelos y entre todos obtener el resultado final, pero se asegura de tomar muestras de entrenamiento equilibradas. 
+
+En este caso, la forma de proceder sería realizar una evaluación del modelo sin balancear y posteriormente, evaluar el modelo tras balancearlo con técnicas como la de *oversampling* o la penalizando clases mayoritarias, con el fin de comparar qué modelo da mejores resultados para utilizar este. 
+
+Este procedimiento se llevará a cabo en la segunda parte del estudio, antes de la realización de los modelos.
+
+## Análisis de correlación
+
+### Correlación de Spearman
+
+Para comprobar la relación entre las distintas variables presentes en los datos se va a proceder al estudio de la **correlación linear** entre las mismas. Lo primero que se hará para ello será realizar un plot de _correlación de Spearman_ entre todas las variables, organizándolas en función de un algoritmo de clustering que permita analizar los distintos grupos de variables que hay.
+
+Además de este gráfico se presenta el resultado del _test estadístico de Bartlett_. El resultado de este test indica si la matriz de correlación es significativamente diferente a la matriz identidad, es decir, si hay correlación entre las distintas variables presentes en los datos datos.
+
+
+```{r}
+# Tratamiento previo y filtrado de los datos
+  ## Se eliminan los valores con cero varianza y se preparan los datos de las variables numéricas
+no_zero_var <- nearZeroVar(data_escalado_numericas)
+datos_filtrados <- data_escalado_numericas[,-no_zero_var]
+datos_filtrados_frame <- cbind(as.data.frame(datos_filtrados), data[42])
+  ## Filtrado en dataset completo
+nzv <- nzv(data_escalado_completo)
+data_escalado_completo_nzv = data_escalado_completo[, -nzv]
+
+# Test de Spearman
+spearman <- cor(datos_filtrados , method = "spearman")
+
+# Estudio de la correlación lineal con corplot
+  # Se calcula una matriz de valores p de correlación
+p.mat <- cor_pmat(as.data.frame(spearman))
+
+  # Corplot con ggplot
+ggcorrplot(as.data.frame(spearman), hc.order = TRUE, outline.col = "white", colors = c("#6D9EC1", "white", "#E46726"), title="Análisis de correlación - Spearman", legend.title="Leyenda de corrplot", tl.cex=4, p.mat = p.mat, insig = "blank")
+```
+```{r}
+data_escalado_completo_nzv <- readRDS("./data_escalado_completo_nzv.RDS")
+```
+
+En el análisis de correlación presentado con anterioridad se pueden apreciar en color blanco los coeficientes que no son significativos, mientras que los que se aprecian coloreados y poseen una tonalidad más fuerte de color, son los coeficientes más significativos. Cabe destacar que una correlación, por pequeña que sea, si es significativa y se debe considerar.
+
+En el caso de la **tonalidad anaranjada haría referencia a las correlaciones positivas, mientras que las tonalidades azules, a las negativas**.
+
+Lo que se puede observar es una **correlación entre las variables que describen propiedades topológicas**, como es el caso de 'aphilicity' y 'zdna', y a su vez, estas propiedades poseen correlacionadas altas con la aparición de algunos grupos de dos nucleótidos o nucleótidos individuales, como 'T', 'TT', 'TA'...
+
+```{r}
+# Cortest Bartlett
+psych::cortest.bartlett(spearman,42)
+```
+Como se ha mencionado anteriormente, el _test de Bartlett_, cuyos resultados se muestran en el paso anterior, indica si hay una diferencia significativa con la matriz identidad. Al tener como hipótesis nula la igualdad entre ambas matrices, un _pvalor_ como el presente de 6.14463e-212, mucho menor que 0.05, obliga a rechazar esta hipótesis nula y a asumir que hay diferencias entre ambas matrices, es decir, que **hay variables que están significativamente correlacionadas**.
+
+Tras esto se va proceder a visualizar la siguiente gráfica que va a permitir evaluar las **relaciones verdaderas entre cada predictor y la variable respuesta de forma independiente**. Este test va a ayudar a aclarar cualquier duda acerca de la influencia de las variables (eje X) con el valor de y:
+
+```{r, warning=FALSE}
+# Creación de la matriz de cor
+cor_matriz = cor(data_escalado_numericas)
+
+# Aplicación de cor.test sobre cada columna con la variable respuesta, guardando el p-valor
+formacion_matriz = function(cor_matriz, p_values){
+  upper=upper.tri(cor_matriz)
+  data.frame(row=rownames(cor_matriz)[row(cor_matriz)[upper]],
+           column=rownames(cor_matriz)[col(cor_matriz)[upper]],
+           p=p_values[upper])}
+
+# Asignación del nombre 
+matriz_datos = formacion_matriz(cor_matriz,cor_matriz)
+
+# Representación con ggplot
+ggplot(data=matriz_datos) + aes(x=row,y=-log10(p), fill=row) +
+  geom_col() + geom_hline(yintercept = -log10(0.05), col="black", linetype="dotted") +
+  theme_bw() +
+  theme (text = element_text(size=6)) +
+  labs(title="-log10(pval) para correlaciones predictores vs y",
+       ylab="p-valor)",xlab="Predictores", face="bold") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  theme(plot.title=element_text(hjust=0.5, size=rel(1.5)), panel.grid = element_blank())
+```
+
+Hay que recordar que H0 indica que NO hay correlación entre las variables, o lo que es lo mismo: que las parejas de variables para las cuales el p-valor sea MENOR de 0.05 (valor que se indica en la línea de la gráfica anterior) permitirán RECHAZAR esa hipótesis nula con una confianza del 95% para afirmar que existe asociación entre ellas con casi total probabilidad. Cuanto más pequeño sea el valor, más significativa será dicha relación. 
+
+Como se realizó el -10(pvalor), las conclusiones que se obtendrían serían al contrario, y por tanto, lo que se puede concretar es que en el modelo, **las variables CA, CT, GA y TA NO están correlacionadas, mientras que el resto de variables sí lo están**.
+
+### Eliminación de variables muy correlacionadas
+Para futuros análisis puede ser necesario **trabajar con variables que no estén altamente correlacionadas**. Es por esto que se va a hacer uso de la función `findCorrelation` de `Caret`, la cual identifica variables con una alta correlación entre sí y tras esto calcula la correlación absoluta media de cada una de estas con el resto de variantes. Posteriormente a esto, se puede proceder a la eliminación de estas variables.
+
+El criterio de _cutoff_ o punto de corte para medir qué correlaciones se van a eliminar queda a criterio del autor y a las necesidades que presente el análisis. En este caso, se decidió eliminar aquellas variables que presentaran una correlación superior a 0.90 con el objetivo de no eliminar muchas variables que pudieran ser predictores útiles en futuros análisis.
+
+```{r}
+# Correlaciones altas de Spearman
+find_cor_spearman <- caret::findCorrelation(
+  spearman,
+  cutoff = 0.9,
+  verbose = TRUE,
+  names = TRUE)
+
+find_cor_spearman
+```
+
+La función `findCorrelation`, en el caso de usar la _cor de Spearman_, arroja los resultados mostrados con anterioridad. Estas variables poseen una correlación mayor a 0.90, y podrían aportar información redundante.
+
+Como se puede comprobar, estas variables corresponden a propiedades topológicas y también termodinámicas que se presentan como muy correlacionadas en la representación de Spearman.
+
+Previamente se ha procedido a la eliminación de variables con varianza cercana a 0. Esto también evita incluir información redundante en el modelo y puede mejorar la precisión del modelo. Además de esto, se va a proceder a **la elminación de de variables altamente de correlacionadas** según la información arrojada con anterioridad gracias a la ayuda de `findCorrelation`:
+
+```{r, all_of}
+# Eliminación de variables correlacionadas
+  ## Númericos
+datos_filtados_cor <- dplyr::select(datos_filtrados, -all_of(find_cor_spearman))
+  # Numéricos y factores
+datos_filtradosyescalados_cor_completos <- dplyr::select(data_escalado_completo_nzv, -all_of(find_cor_spearman))
+```
+
+```{r}
+# Numéricos
+datos_filtados_cor <- readRDS("./datos_filtados_cor.RDS")
+
+# Numéricos y factores
+datos_filtradosyescalados_cor_completos <- readRDS("./datos_filtradosyescalados_cor_completos.RDS")
+
+# Numérico + 'class' pero sin 'polyA_signal'
+datos_completos_escalados_cor_sinpolyA <- datos_filtradosyescalados_cor_completos[2:30]
+datos_completos_escalados_cor_sinpolyA <- readRDS("./datos_completos_escalados_cor_sinpolyA.RDS")
+```
+
+## Modelo de regresión
+
+En este apartado **se va a intentar encontrar asociaciones lineales entre los predictores numéricos o variables numéricas (valores continuos) y la variable de clase**, que es un factor discreto. 
+
+Para realizar esta tarea se van a implementar modelos de **regresión logística binaria**, ya que esta es ideal para los casos en los que se desea predecir la presencia o ausencia de una característica o resultado según los valores de un conjunto de predictores. Esta regresión logística es buena para determinar asociaciones entre predictores continuos y variables respuesta binarias. Para evaluar qué tan bien se ajusta un modelo de regresión logística a un conjunto de datos, se pueden observar dos métricas:
+
+ * Sensibilidad: es la probabilidad de que el modelo prediga un resultado positivo para una observación cuando en realidad el resultado es positivo.
+ * Especificidad: es la probabilidad de que el modelo prediga un resultado negativo para una observación cuando en realidad el resultado es negativo.
+
+Una forma fácil de visualizar esas dos métricas es crear una **curva ROC**, una gráfica que muestra la sensibilidad y especificidad de un modelo de regresión logística. Se verá al final del apartado.
+
+Se va a proceder a crear, primero, un modelo que distinga las secuencias 5'-UTR de las que no lo sean, y así con el resto de clases: ICE, lncRNA, ncRNA, pseudoGene y 3'-UTR, respectivamente. Tras esto, se va a comprobar las variables más significativas en los distintos modelos de regresión que se han creado.
+
+### Regresión logística binaria de 5'-UTR
+
+```{r}
+# Modelo 5-UTR
+modelo_5UTR = glm(formula = datos_completos_escalados_cor_sinpolyA$class == "5-UTR" ~ ., family = binomial(link = "logit"), 
+    data = datos_completos_escalados_cor_sinpolyA)
+summary(modelo_5UTR)
+```
+En el modelo expuesto con anterioridad se pueden distinguir las secuencias 5'-UTR de las que no lo son. Se puede observar que al enfrentar esta clase con las variables se obtiene que **todas las variables son significativas para esta clase 5-UTR**, lo que indica que hay una relación lineal entre ellas y la región 5-UTR.
+
+Es la única clase en la que todas las variables expuestas hasta el momento se muestran significativas.
+
+### Regresión logística binaria de ICE
+```{r}
+# Modelo ICE
+modelo_ICE = glm(formula = datos_completos_escalados_cor_sinpolyA$class == "ICE" ~ ., family = binomial(link = "logit"), 
+    data = datos_completos_escalados_cor_sinpolyA)
+summary(modelo_ICE)
+```
+En el modelo expuesto con anterioridad se pueden distinguir las secuencias ICE de las que no lo son. Se puede observar que al enfrentar esta clase con las variables se obtiene que variables como por ejemplo **'bdnatwist', 'bendability', 'proteindnatwist', 'AT', 'TA', 'TC' y 'GA' NO son significativas para esta clase ICE**. El resto de variables sí que muestran significancia, lo que indica que hay una relación lineal entre ellas e ICE.
+
+### Regresión logística binaria de lncRNA
+```{r}
+# Modelo lncRNA
+modelo_lncRNA = glm(formula = datos_completos_escalados_cor_sinpolyA$class == "lncRNA" ~ ., family = binomial(link = "logit"), 
+    data = datos_completos_escalados_cor_sinpolyA)
+summary(modelo_lncRNA)
+```
+En el modelo expuesto con anterioridad se pueden distinguir las secuencias lncRNA de las que no lo son. Se puede observar que al enfrentar esta clase con las variables se obtiene que variables como por ejemplo **'bdnatwist', 'bendability', 'G', 'C', 'TT', 'GG', 'AT', 'AG', 'TC', 'GA' y 'CT' NO son significativas para esta clase lncRNA**. El resto de variables sí que muestran significancia, lo que indica que hay una relación lineal entre ellas y lncRNA.
+
+### Regresión logística binaria de ncRNA
+```{r}
+# Modelo ncRNA
+modelo_ncRNA = glm(formula = datos_completos_escalados_cor_sinpolyA$class == "ncRNA" ~ ., family = binomial(link = "logit"), 
+    data = datos_completos_escalados_cor_sinpolyA)
+summary(modelo_ncRNA)
+```
+En el modelo expuesto con anterioridad se pueden distinguir las secuencias ncRNA de las que no lo son. Se puede observar que al enfrentar esta clase con las variables se obtiene que variables como por ejemplo **'AA' y 'GG' NO son significativas para esta clase ncRNA**. El resto de variables sí que muestran significancia, lo que indica que hay una relación lineal entre ellas y ncRNA.
+
+### Regresión logística binaria pseudoGene
+```{r}
+# Modelo pseudoGene
+modelo_pseudoGene = glm(formula = datos_completos_escalados_cor_sinpolyA$class == "pseudoGene" ~ ., family = binomial(link = "logit"), 
+    data = datos_completos_escalados_cor_sinpolyA)
+summary(modelo_pseudoGene)
+```
+En el modelo expuesto con anterioridad se pueden distinguir las secuencias pseudoGene de las que no lo son. Se puede observar que al enfrentar esta clase con las variables se obtiene que variables como por ejemplo **'meanEE', 'aphilicity', 'bdnatwist', 'bendability', 'cpnpgislands', 'proteindnatwist', 'T', 'AA', 'TT', 'TC' y 'GA' NO son significativas para esta clase pseudoGene**. El resto de variables sí que muestran significancia, lo que indica que hay una relación lineal entre ellas y pseudoGene.
+
+Esta clase en particular es la que **menos relaciones lineales muestran con el total de variables**.
+
+### Regresión logística binaria UTR
+```{r}
+# Modelo UTR
+modelo_UTR = glm(formula = datos_completos_escalados_cor_sinpolyA$class == "UTR" ~ ., family = binomial(link = "logit"), 
+    data = datos_completos_escalados_cor_sinpolyA)
+summary(modelo_UTR)
+```
+
+En el modelo expuesto con anterioridad se pueden distinguir las secuencias 3'-UTR de las que no lo son. Se puede observar que al enfrentar esta clase con las variables se obtiene que la variable **'cpnpgislands' NO es significativas para esta clase 3'-UTR**, siendo la única que no lo es, y por tanto, el resto de variables sí que muestran significancia, lo que indica que hay una relación lineal entre ellas y 3'-UTR.
+
+Como **conclusiones** del procedimiento anterior, destacar:
+
+ * Como se ha mencionado, **pseudoGene es la variable de clase que menos relaciones lineales muestran con el total de variables**, pero sin embargo, presenta algunas variables de alto nivel de significancia que sí están presentes en todos los modelos, como 'meanPd' o 'mean_phastCons7way'.
+
+ * En el caso del modelo logístico binomial que distingue 3'-UTR de no 3'-UTR, se observan relaciones lineales muy significativas con todas las variables menos con "cpnpgislands", variable que sí se presenta significativa en otros modelos. Esto habrá que tenerlo en cuenta posteriormente, ya que el objetivo del estudio es predecir 3-UTR de las regiones que no lo son, y esta característica puede resultar interesante.
+ 
+ * En el caso del modelo logístico binomial que distingue 5'-UTR de no 5'-UTR se puede observar que presenta relaciones lineales muy significativas con TODAS las variables.
+
+ * Se observa que las variables que no son significativas en un modelo lo son en otro. 
+
+ * Se encuentran variables como "meanPd" y meanEE" (relacionadas con datos transcriptómico) que son significativas en casi todos los modelos, menos en el caso de pseudoGene, en la que esta variable 'meanEE' no es significativa, siendo la única clase en la que se da esto.  
+
+Se puede decir que las variables escogidas hasta ahora parecen adecuadas para continuar con el análisis.
+
+### Chi-cuadrado para poly-A
+
+La variable poly-A es factorial, es decir, no es numérica y su contenido se basa en detectar la presencia de la esta poly-A mediante el valor 1, y la no presencia mediante el valor 0. 
+
+A continuación se va a proceder a comprobar la presencia o no de esta variable poly-A dependiendo de la clase:
+
+```{r}
+polyA <- table(datos_filtradosyescalados_cor_completos$polyA_signal, datos_filtradosyescalados_cor_completos$class)
+
+knitr::kable(polyA , caption = "Distribución Poly-A") %>% kable_styling(bootstrap_options = "condensed")
+```
+
+
+Como se puede apreciar en la tabla anterior, **en todas las clases lo que predomina es que NO esté presente esta Poly-A, menos en el caso de 3'UTR, en la que SÍ predomina la presencia de esta variable factorial frente a la no presencia de la misma**. Esto tiene sentido, ya que desde el punto de vista biológico la cola Poly-A se encuentra a continuación del extremo 3-UTR. 
+
+Se puede comprobar esta asociación desde un punto de vista estadístico mediante una **prueba chi-cuadrado para relacionar variables discretas**, como se muestra a continuación para todas las clases:
+
+```{r}
+# Relación de poly-A con la clase 3'-UTR
+chisq.test(table(datos_filtradosyescalados_cor_completos$polyA_signal, datos_filtradosyescalados_cor_completos$class == "UTR"))
+```
+```{r}
+# Relación de poly-A con la clase 5'-UTR
+chisq.test(table(datos_filtradosyescalados_cor_completos$polyA_signal, datos_filtradosyescalados_cor_completos$class == "5-UTR"))
+```
+```{r}
+# Relación de poly-A con la clase ICE
+chisq.test(table(datos_filtradosyescalados_cor_completos$polyA_signal, datos_filtradosyescalados_cor_completos$class == "ICE"))
+```
+```{r}
+# Relación de poly-A con la clase lncRNA
+chisq.test(table(datos_filtradosyescalados_cor_completos$polyA_signal, datos_filtradosyescalados_cor_completos$class == "lncRNA"))
+```
+```{r}
+# Relación de poly-A con la clase ncRNA
+chisq.test(table(datos_filtradosyescalados_cor_completos$polyA_signal, datos_filtradosyescalados_cor_completos$class == "ncRNA"))
+```
+```{r}
+# Relación de poly-A con la clase pseudoGene
+chisq.test(table(datos_filtradosyescalados_cor_completos$polyA_signal, datos_filtradosyescalados_cor_completos$class == "pseudoGene"))
+```
+
+Una vez realizadas las pruebas, se observa que los datos de poly-A se relacionan con las distintas clases de forma significativa. 
+
+Como se puede comprobar en la primera tabla, su presencia está muy relacionada con la presencia de la región 3’-UTR.
+
+### Curvas ROC
+
+Una vez comprobados los modelos de regresión que distinguen por clase, se puede probar a introducir el modelo con todas las variables vistas en las regresiones y comprobar estos **predictores significativos y la probabilidad asociada a que su presencia o ausencia determine la clase a la que pertenecen los datos de los que disponemos**. Una pregunta que se podría hacer es el cómo se determina dónde está la línea que marca la probabilidad. Dónde estaría ese punto de corte. 
+Para determinar este punto de corte se podría utilizar un **análisis de curvas ROC**.
+
+Las curvas ROC (característica operativa del receptor) constituyen una herramienta importante para evaluar el rendimiento de un modelo de machine learning. Por lo general, se utilizan en problemas de clasificación binaria, concretamente, problemas con dos clases de salidas distintas [@park2004receiver].
+
+En esta ocasión, se va a utilizar la función `ROC` del paquete `Epi` para lograr dicho objetivo.
+
+Las **curvas ROC arrojan información de su capacidad a la hora de discriminar en modelos de clasificación**. En concreto, el área que hay bajo esta curva indica la calidad del modelo, siendo un **modelo útil a partir de áreas superiores a 0.7**, con la particularidad de que esa área aporta el valor del **punto de corte óptimo**. Este punto de corte óptimo coincide con el codo de la curva, es decir: el punto en el que se "pliega".
+
+```{r}
+# Análisis de curvas ROC del modelo completo
+datos_roc <- ROC(form = class ~ meanPd + meanEE + mean_phastCons7way + aphilicity + bdnatwist + bdnatwist + bendability + cpnpgislands + proteindeformation + proteindnatwist + T + G + C + AA + CC + GG + TT + AT + AG + AC + TA + TC + TG + GA + GC + GT + CA +CT + CG ,data=datos_completos_escalados_cor_sinpolyA, plot = "ROC", AUC=TRUE, MI = F)
+```
+
+En el caso del modelo resultante se puede apreciar que el área bajo la curva es de 0.927, y esto indica que **el modelo es muy bueno para clasificar**. Por otro lado, la gráfica resultante también indica **el punto de corte, que es de 0.897**.
+
+## Estudio de normalidad de los datos
+
+El **test de normalidad** se utiliza para comparar la función de distribución acumulada empírica de los datos de la muestra con la distribución esperada si los datos fueran normales [@chan2003biostatistics].
+
+Para estudiar si los datos provienen de una población con distribución normal se disponen de tres herramientas principalmente:
+
+ * Pruebas de hipótesis.
+ * Histograma y/o densidad.
+ * Gráficos cuantil cuantil (QQplot).
+
+### Test de Lillefors
+
+El **test de Kolmogorov-Smirnov** permite estudiar si una muestra procede de una población con una determinada distribución (media y desviación típica), no está limitado únicamente a la distribución normal. El Kolmogorov-Smirnov asume que se conoce la media y varianza poblacional, lo que en la mayoría de los casos no es posible. 
+
+Para solventar este problema, fue desarrollada una modificación del Kolmogorov-Smirnov conocida como **test Lilliefors**. El test Lilliefors asume que la media y varianza son desconocidas, estando especialmente desarrollado para contrastar la normalidad. Es la alternativa al test de Shapiro-Wilk cuando el número de observaciones es mayor de 50.
+
+A continuación se muestra dicho test con todas las variables para comprobar si siguen una distribución normal.
+
+```{r}
+# Test de Lillefors de todas las variables
+apply(datos_filtradosyescalados_cor_completos[,2:29], MARGIN = 2, lillie.test)
+```
+
+La hipótesis nula de este Test de Lilliefors implica que los datos provienen de una población con distribución normal, mientras que la hipótesis alternativa sostiene lo contrario. Al observar los resultados de dicho test expuestos con anterioridad se puede rechazar esta hipótesis nula para todas las variables, y determinar que **no existe normalidad para ninguna de las variables**.
+
+El hecho de no poder asumir la normalidad influye principalmente en los test de hipótesis paramétricos (t-test, anova,…) y en los modelos de regresión, que se han realizado con anterioridad.
+
+Muestros test estadísticos requieren de normalidad en los datos, por lo que al saber que en este caso no se da dicha condición hay que tener precaución.
+
+### Histograma y curva normal
+
+A continuación se va representar los datos de algunas variables correlacionadas según los resultados de las distintas regresiones mediante un histograma. Además se va a superponer la curva de una distribución normal con la misma media y desviación estándar que muestran los datos.
+
+Las variables que se van a visualizar son:
+
+```{r, warning=FALSE}
+# Histograma de normalidad de 'meanPd', 'meanEE' y mean_phastCons7way
+
+h_nor_meanPd <- ggplot(data = datos_completos_escalados_cor_sinpolyA, aes(x = meanPd)) +
+  geom_histogram(aes(y = ..density.., fill = ..count..), colour="lightcoral", fill="lightcoral") +
+  scale_fill_gradient(low = "#DCDCDC", high = "#7C7C7C") +
+  stat_function(fun = dnorm, colour = "black",
+                args = list(mean = mean(datos_completos_escalados_cor_sinpolyA$meanPd),
+                            sd = sd(datos_completos_escalados_cor_sinpolyA$meanPd))) +
+  ggtitle("meanPd") +
+  labs(y="densidad") +
+  theme(axis.title.x = element_text(vjust=-0.5, size=rel(1))) +
+  theme(axis.title.y = element_text(vjust=-0.5, size=rel(1))) +
+  theme_bw() +
+  theme(plot.title=element_text(hjust=0.5, size=rel(1)), panel.grid = element_blank()) 
+
+h_nor_meanEE <- ggplot(data = datos_completos_escalados_cor_sinpolyA, aes(x = meanEE)) +
+  geom_histogram(aes(y = ..density.., fill = ..count..), colour="lightcoral", fill="lightcoral") +
+  scale_fill_gradient(low = "#DCDCDC", high = "#7C7C7C") +
+  stat_function(fun = dnorm, colour = "black",
+                args = list(mean = mean(datos_completos_escalados_cor_sinpolyA$meanEE),
+                            sd = sd(datos_completos_escalados_cor_sinpolyA$meanEE))) +
+  ggtitle("meanEE") +
+  labs(y="densidad") +
+  theme(axis.title.x = element_text(vjust=-0.5, size=rel(1))) +
+  theme(axis.title.y = element_text(vjust=-0.5, size=rel(1))) +
+  theme_bw() +
+  theme(plot.title=element_text(hjust=0.5, size=rel(1)), panel.grid = element_blank()) 
+
+h_nor_mean_phastCons7way <- ggplot(data = datos_completos_escalados_cor_sinpolyA, aes(x = mean_phastCons7way)) +
+  geom_histogram(aes(y = ..density.., fill = ..count..), colour="lightcoral", fill="lightcoral") +
+  scale_fill_gradient(low = "#DCDCDC", high = "#7C7C7C") +
+  stat_function(fun = dnorm, colour = "black",
+                args = list(mean = mean(datos_completos_escalados_cor_sinpolyA$mean_phastCons7way),
+                            sd = sd(datos_completos_escalados_cor_sinpolyA$mean_phastCons7way))) +
+  ggtitle("mean_phastCons7way") +
+  labs(y="densidad") +
+  theme(axis.title.x = element_text(vjust=-0.5, size=rel(1))) +
+  theme(axis.title.y = element_text(vjust=-0.5, size=rel(1))) +
+  theme_bw() +
+  theme(plot.title=element_text(hjust=0.5, size=rel(1)), panel.grid = element_blank()) 
+
+grid.arrange(h_nor_meanPd, h_nor_meanEE, h_nor_mean_phastCons7way, ncol = 3, widths = c(1,1,1))
+```
+
+Los resultados obtenidos como se puede apreciar implican que la representación gráfica no arroja la existencia de normalidad en el caso de las variables 'meanPd', 'meanEE' y 'mean_phastCons7way'.
+
+```{r}
+# Histogramas de normalidad de 'aphilicity', 'bdnatwist' y 'bendability'
+
+h_nor_aphilicity <- ggplot(data = datos_completos_escalados_cor_sinpolyA, aes(x = aphilicity)) +
+  geom_histogram(aes(y = ..density.., fill = ..count..), colour="lightcoral", fill="lightcoral") +
+  scale_fill_gradient(low = "#DCDCDC", high = "#7C7C7C") +
+  stat_function(fun = dnorm, colour = "black",
+                args = list(mean = mean(datos_completos_escalados_cor_sinpolyA$aphilicity),
+                            sd = sd(datos_completos_escalados_cor_sinpolyA$aphilicity))) +
+  ggtitle("aphilicity") +
+  labs(y="densidad") +
+  theme(axis.title.x = element_text(vjust=-0.5, size=rel(1))) +
+  theme(axis.title.y = element_text(vjust=-0.5, size=rel(1))) +
+  theme_bw() +
+  theme(plot.title=element_text(hjust=0.5, size=rel(1)), panel.grid = element_blank()) 
+
+h_nor_bdnatwist <- ggplot(data = datos_completos_escalados_cor_sinpolyA, aes(x = bdnatwist)) +
+  geom_histogram(aes(y = ..density.., fill = ..count..), colour="lightcoral", fill="lightcoral") +
+  scale_fill_gradient(low = "#DCDCDC", high = "#7C7C7C") +
+  stat_function(fun = dnorm, colour = "black",
+                args = list(mean = mean(datos_completos_escalados_cor_sinpolyA$bdnatwist),
+                            sd = sd(datos_completos_escalados_cor_sinpolyA$bdnatwist))) +
+  ggtitle("bdnatwist") +
+  labs(y="densidad") +
+  theme(axis.title.x = element_text(vjust=-0.5, size=rel(1))) +
+  theme(axis.title.y = element_text(vjust=-0.5, size=rel(1))) +
+  theme_bw() +
+  theme(plot.title=element_text(hjust=0.5, size=rel(1)), panel.grid = element_blank()) 
+
+h_nor_bendability <- ggplot(data = datos_completos_escalados_cor_sinpolyA, aes(x = bendability)) +
+  geom_histogram(aes(y = ..density.., fill = ..count..), colour="lightcoral", fill="lightcoral") +
+  scale_fill_gradient(low = "#DCDCDC", high = "#7C7C7C") +
+  stat_function(fun = dnorm, colour = "black",
+                args = list(mean = mean(datos_completos_escalados_cor_sinpolyA$bendability),
+                            sd = sd(datos_completos_escalados_cor_sinpolyA$bendability))) +
+  ggtitle("bendability") +
+  labs(y="densidad") +
+  theme(axis.title.x = element_text(vjust=-0.5, size=rel(1))) +
+  theme(axis.title.y = element_text(vjust=-0.5, size=rel(1))) +
+  theme_bw() +
+  theme(plot.title=element_text(hjust=0.5, size=rel(1)), panel.grid = element_blank())
+
+grid.arrange(h_nor_aphilicity, h_nor_bdnatwist, h_nor_bendability, ncol = 3, widths = c(1,1,1))
+```
+
+En cuanto a los resultados obtenidos para los histogramas con curva normal de 'aphilicity', 'bdnatwist' y 'bendability' es que todas estas variables siguen una distribución típica de **Cauchy**, que es una distribución de probabilidad continua, y por tanto, no se aprecia una distribución típica de normalidad.
+
+```{r}
+# Histogramas de normalidad de 'proteindeformation', 'proteindnatwist' y 'cpnpgislands'
+
+h_nor_proteindeformation <- ggplot(data = datos_completos_escalados_cor_sinpolyA, aes(x = proteindeformation)) +
+  geom_histogram(aes(y = ..density.., fill = ..count..), colour="lightcoral", fill="lightcoral") +
+  scale_fill_gradient(low = "#DCDCDC", high = "#7C7C7C") +
+  stat_function(fun = dnorm, colour = "black",
+                args = list(mean = mean(datos_completos_escalados_cor_sinpolyA$proteindeformation),
+                            sd = sd(datos_completos_escalados_cor_sinpolyA$proteindeformation))) +
+  ggtitle("proteindeformation") +
+  labs(y="densidad") +
+  theme(axis.title.x = element_text(vjust=-0.5, size=rel(1))) +
+  theme(axis.title.y = element_text(vjust=-0.5, size=rel(1))) +
+  theme_bw() +
+  theme(plot.title=element_text(hjust=0.5, size=rel(1)), panel.grid = element_blank()) 
+
+
+h_nor_proteindnatwist <- ggplot(data = datos_completos_escalados_cor_sinpolyA, aes(x = proteindnatwist)) +
+  geom_histogram(aes(y = ..density.., fill = ..count..), colour="lightcoral", fill="lightcoral") +
+  scale_fill_gradient(low = "#DCDCDC", high = "#7C7C7C") +
+  stat_function(fun = dnorm, colour = "black",
+                args = list(mean = mean(datos_completos_escalados_cor_sinpolyA$proteindnatwist),
+                            sd = sd(datos_completos_escalados_cor_sinpolyA$proteindnatwist))) +
+  ggtitle("proteindnatwist") +
+  labs(y="densidad") +
+  theme(axis.title.x = element_text(vjust=-0.5, size=rel(1))) +
+  theme(axis.title.y = element_text(vjust=-0.5, size=rel(1))) +
+  theme_bw() +
+  theme(plot.title=element_text(hjust=0.5, size=rel(1)), panel.grid = element_blank()) 
+
+h_nor_cpnpgislands <- ggplot(data = datos_completos_escalados_cor_sinpolyA, aes(x = cpnpgislands)) +
+  geom_histogram(aes(y = ..density.., fill = ..count..), colour="lightcoral", fill="lightcoral") +
+  scale_fill_gradient(low = "#DCDCDC", high = "#7C7C7C") +
+  stat_function(fun = dnorm, colour = "black",
+                args = list(mean = mean(datos_completos_escalados_cor_sinpolyA$cpnpgislands),
+                            sd = sd(datos_completos_escalados_cor_sinpolyA$cpnpgislands))) +
+  ggtitle("cpnpgislands") +
+  labs(y="densidad") +
+  theme(axis.title.x = element_text(vjust=-0.5, size=rel(1))) +
+  theme(axis.title.y = element_text(vjust=-0.5, size=rel(1))) +
+  theme_bw() +
+  theme(plot.title=element_text(hjust=0.5, size=rel(1)), panel.grid = element_blank()) 
+
+grid.arrange(h_nor_proteindeformation, h_nor_proteindnatwist, h_nor_cpnpgislands, ncol = 3, widths = c(1,1,1))
+```
+
+Al igual que en el caso anterior, los resultados obtenidos para 'proteindeformation', 'proteindnastwist' y 'cpnpgislands' es que las tres muestran una distribución típica de **Cauchy**, y por ende, no se representa una distribución de normalidad.
+
+### Gráficos cuantil cuantil (QQplot)
+
+Los **gráficos QQplot** permiten comparar los cuantiles de la distribución observada con los cuantiles teóricos de una distribución normal con la misma media y desviación estándar que los datos. **Cuanto más se aproximen los datos a una normal, más alineados están los puntos entorno a la recta**.
+
+A continuación se va a representar algunas variables correlacionadas según los resultados de las distintas regresiones mediante QQplot:
+
+```{r}
+# QQplot de 'meanPd', 'meanEE' y 'mean_phastCons7way'
+qqplot_meanPd <- qplot(sample = meanPd, data = datos_completos_escalados_cor_sinpolyA, color="meanPd") +
+labs(title="meanPd",
+       y = "Cuantiles de muestra", x="Cuantiles teóricos") +
+geom_abline() +
+theme_bw() +
+theme(plot.title=element_text(hjust=0.5, size=rel(1)), panel.grid = element_blank(), legend.position="none") 
+
+qqplot_meanEE <- qplot(sample = meanEE, data = datos_completos_escalados_cor_sinpolyA, color="meanEE") +
+labs(title="meanEE",
+       y = "Cuantiles de muestra", x="Cuantiles teóricos") +
+geom_abline() +
+theme_bw() +
+theme(plot.title=element_text(hjust=0.5, size=rel(1)), panel.grid = element_blank(), legend.position="none") 
+
+qqplot_mean_phastCons7way<- qplot(sample = mean_phastCons7way, data = datos_completos_escalados_cor_sinpolyA, color="mean_phastCons7way", show.legend=FALSE)+
+labs(title="mean_phastCons7way",
+       y = "Cuantiles de muestra", x="Cuantiles teóricos") +
+geom_abline() +
+theme_bw() +
+theme(plot.title=element_text(hjust=0.5, size=rel(1)), panel.grid = element_blank(), legend.position="none") 
+
+grid.arrange(qqplot_meanPd, qqplot_meanEE, qqplot_mean_phastCons7way, ncol = 3, widths = c(1,1,1))
+```
+
+En el caso de las variables estudiadas con anterioridad mediante el QQplot ('meanPd', 'meanEE' y 'mean_phastCons7way'), se puede decir que ninguna de ellas se ve reflejada con la línea que se supone debería seguir para representar cierta normalidad en los datos.
+
+```{r}
+# QQplot de normalidad de 'aphilicity', 'bdnatwist' y 'bendability'
+qqplot_aphilicity <- qplot(sample = aphilicity, data = datos_completos_escalados_cor_sinpolyA, color="aphilicity") +
+labs(title="aphilicity",
+       y = "Cuantiles de muestra", x="Cuantiles teóricos") +
+geom_abline() +
+theme_bw() +
+theme(plot.title=element_text(hjust=0.5, size=rel(1)), panel.grid = element_blank(), legend.position="none") 
+
+qqplot_bdnatwist <- qplot(sample = bdnatwist, data = datos_completos_escalados_cor_sinpolyA, color="bdnatwist") +
+labs(title="bdnatwist",
+       y = "Cuantiles de muestra", x="Cuantiles teóricos") +
+geom_abline() +
+theme_bw() +
+theme(plot.title=element_text(hjust=0.5, size=rel(1)), panel.grid = element_blank(), legend.position="none") 
+
+qqplot_bendability <- qplot(sample = bendability, data = datos_completos_escalados_cor_sinpolyA, color="bendability") +
+labs(title="bendability",
+       y = "Cuantiles de muestra", x="Cuantiles teóricos") +
+geom_abline() +
+theme_bw() +
+theme(plot.title=element_text(hjust=0.5, size=rel(1)), panel.grid = element_blank(), legend.position="none") 
+
+grid.arrange(qqplot_aphilicity, qqplot_bdnatwist, qqplot_bendability, ncol = 3, widths = c(1,1,1))
+```
+
+En este caso, las variables estudiadas con anterioridad, que corresponden a 'aphilicity', 'bdnatwist' y 'bendability' se corresponden algo a las distintas líneas de sus representaciones, pero en los extremos de las líneas se pierde la correspondencia, por lo que los resultados no son concluyentes para la normalidad.
+
+```{r}
+# QQplot de normalidad de 'proteindeformation', 'proteindnatwist' y 'cpnpgislands'
+qqplot_proteindeformation <- qplot(sample = proteindeformation, data = datos_completos_escalados_cor_sinpolyA, color="proteindeformation") +
+labs(title="proteindeformation",
+       y = "Cuantiles de muestra", x="Cuantiles teóricos") +
+geom_abline() +
+theme_bw() +
+theme(plot.title=element_text(hjust=0.5, size=rel(1)), panel.grid = element_blank(), legend.position="none") 
+
+qqplot_proteindnatwist <- qplot(sample = proteindnatwist, data = datos_completos_escalados_cor_sinpolyA, color="proteindnatwist") +
+labs(title="proteindnatwist",
+       y = "Cuantiles de muestra", x="Cuantiles teóricos") +
+geom_abline() +
+theme_bw() +
+theme(plot.title=element_text(hjust=0.5, size=rel(1)), panel.grid = element_blank(), legend.position="none") 
+
+qqplot_cpnpgislands <- qplot(sample = cpnpgislands, data = datos_completos_escalados_cor_sinpolyA, color="cpnpgislands") +
+labs(title="proteindeformation",
+       y = "Cuantiles de muestra", x="Cuantiles teóricos") +
+geom_abline() +
+theme_bw() +
+theme(plot.title=element_text(hjust=0.5, size=rel(1)), panel.grid = element_blank(), legend.position="none") 
+
+grid.arrange(qqplot_proteindeformation, qqplot_proteindnatwist, qqplot_cpnpgislands, ncol = 3, widths = c(1,1,1))
+```
+
+Al igual que en el caso anterior, para las variables 'proteindeformation', 'proteindnastwist' y 'cpnpgislands' se ve cierta correspondencia con las distintas líneas que deben seguir, pero se pierde la misma cuando se llega a los extremos de las líneas, por lo que de nuevo, los resultados no son concluyentes para la normalidad.
+
+Además de observar si hay o no normalidad en los datos, se va a proceder a estudiar si en las variables filtradas hasta ahora hay **presencia de valores fuera de rango**, es decir, si hay *outliers* en las variables. 
+
+Cabe destacar que el gráfico que se va a visualizar a continuación corresponde a las **variables filtradas, pero ya escaladas, eliminando varianza 0 y centradas, así como también sin variables identificadas con correlación alta**:
+
+```{r}
+melt_variables_filtradas <- melt.data.frame(datos_filtradosyescalados_cor_completos[,2:30], id = "class")
+
+ggplot(data=melt_variables_filtradas, aes(x=variable, y=value, color=variable, fill=variable)) +
+  geom_boxplot(alpha=0.6) +
+  scale_fill_discrete() +
+  scale_color_discrete() +
+  ggtitle("Diagramas de cajas de variables filtradas") +
+  theme_bw() +
+  ylab("Valores") +
+  xlab("Variables") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  #theme(plot.title=element_text(hjust=0.5, size=rel(1)))
+  theme(plot.title=element_text(hjust=0.5, size=rel(1.5)), panel.grid = element_blank())
+```
+
+Como se puede observar se cuenta con presencia de *outliers* en todas las variables presentes, destacando los presentes en la variable 'meanEE', que presenta muchos con valores negativos a diferencia del resto.
+
+Se va a investigar un poco qué pasa con esta variable, comparándola con la variable 'meanPd':
+
+```{r}
+# Variable 'meanEE' por classe:
+variable_meanEE = filter(melt_variables_filtradas, variable == "meanEE")
+
+ggplot(data=variable_meanEE, aes(x=value, color=class, fill=class)) +
+  geom_density(alpha=0.6) +
+  scale_fill_discrete() +
+  scale_color_discrete() +
+  ylab("") +
+  xlab("Valores") +
+  theme_bw() +
+  theme(plot.title=element_text(hjust=0.5, size=rel(1.5)), panel.grid = element_blank()) +
+  facet_wrap(~ class, ncol=2,scales = "free") 
+```
+
+Como se puede apreciar, esta variable cuenta con presencia de valores negativos en todas las clases/regiones, lo que explicaría la presencia de valores fuera de rango que toman valores tan negativos, destacando mayoritariamente la visualización de ncRNA, que es en la que se ve que alcanza los valores más negativos.
+
+```{r}
+# Variable 'meanPd' por classe:
+variable_meanPd = filter(melt_variables_filtradas, variable == "meanPd")
+
+ggplot(data=variable_meanPd, aes(x=value, color=class, fill=class)) +
+  geom_density(alpha=0.6) +
+  scale_fill_discrete() +
+  scale_color_discrete() +
+  ylab("") +
+  xlab("Valores") +
+  theme_bw() +
+  theme(plot.title=element_text(hjust=0.5, size=rel(1.5)), panel.grid = element_blank()) +
+  facet_wrap(~ class, ncol=2,scales = "free") 
+```
+
+Si se comparan los resultados por clase de la variable 'meanPd' con 'meanEE' se puede apreciar que esta presenta algunos valores fuera de rango que toman valores positivos, lo que queda justificado al ver los valores que toma dicha variable en las distintas clases, que se diferencia de forma clara con lo que se encontró previamente en 'meanEE', que tomaba valores negativos.
+
+
+## Análisis no supervisado
+
+### Análisis de componentes principales (PCA)
+Como se cuenta con unos dataset que tiene un gran número de variables correlacionadas, se puede realizar un **análisis de componentes principales** (PCA). Es un método estadístico que permite simplificar la complejidad (reducción de la dimensionalidad) de espacios muestrales con muchas dimensiones a la vez que conserva su información [@abdi2010principal].
+
+```{r}
+# PCA
+datos_pca = PCA(datos_completos_escalados_cor_sinpolyA, quali.sup = 29, ncp = 28, graph = F, 
+    scale.unit = F)
+```
+
+Una vez realizado el análisis PCA y obtenidos los datos que se requieren, se puede proceder a la representación gráfica. Se van a representar las dos primeras componentes extraídas del PCA, diferenciando dos gráficas distintas: una para las clases, y otra para el resto de variables numéricas. La razón para escoger las dos primeras componentes es porque esas son las que mejor explican la varianza de los datos. El *primer componente principal* es un vector, con un valor para cada ejemplo del dataset, y se define como la combinación lineal de las variables originales que tiene varianza máxima, mientras que el *segundo componente principal* describe la variabilidad en los datos que no está correlacionada en con el primer componente principal.
+
+```{r}
+# Gráfico de las clases por PCA
+PCA1_clases <- fviz_pca_ind(datos_pca, geom.ind = "point", col.ind = datos_completos_escalados_cor_sinpolyA$class, 
+addEllipses = TRUE, ellipse.level=0.95, title = "Gráfico de clases - PCA", legend.title = "Tipo de clase") +
+scale_color_brewer(palette = "Set2") +
+theme_bw() +
+theme(plot.title=element_text(hjust=0.5, size=rel(1.5)), panel.grid = element_blank())
+PCA1_clases
+
+# Gráfico de las variables por PCA
+PCA1_variables <- fviz_pca_var(datos_pca, col.var="steelblue", title="Gráfico de variables - PCA", legend.title = "Variables")+ theme_bw() +
+theme(plot.title=element_text(hjust=0.5, size=rel(1.5)), panel.grid = element_blank()) 
+PCA1_variables
+```
+
+* Si se observa la representación resultante del **gráfico de clases** se puede apreciar que todas las clases se encuentran muy centradas, con la única excepción de 5'-UTR, que abarca una anchura superior al resto de clases. También 3'-UTR se desvía un poco de las otras, pero ICE, lncRNA, ncRNA y pseudogene se encuentran centradas y muy cercanas entre sí.
+
+* Si se observa el **gráfico de las variables** se puede ver cómo, por ejemplo, variables como las medias de 'meanEE' y 'mean_phastCons7way' se encuentran muy cerca entre sí, mientras que 'meanPd' se encuentra totalmente enfrentada a ellas. Por otro lado se destaca que algunas propiedades termodinámicas y topológicas de las secuencias como 'aphilicity' y 'bendability' se encuentran totalmente enfrentadas, ya que 'aphilicity' formaría parte de la primera componente principal mientras que 'bendability' no estaría bien representada para ninguna de las dos componentes principales.
+
+A continuación, tras este estudio preliminar, se va a proceder a finalizar este análisis de componentes principales mostrando los **10 predictores que más información aportan en cada una de las 2 componentes principales del conjunto de datos**, utilizando como indicador de su importancia la varianza total que son capaces de explicar.
+
+```{r}
+# Vectores más significativos de la primera dimensión
+var1 <- head(sort(datos_pca$var$cos2[, 1], decreasing = T), 
+    10)
+# Vectores más significativos de la segunda dimensión
+var2 <- head(sort(datos_pca$var$cos2[, 2], decreasing = T), 
+    10)
+
+knitr::kable(var1, caption = "Vectores más significativos de la primera dimensión en el conjunto de datos") %>%
+  kable_styling(bootstrap_options = "condensed")
+
+knitr::kable(var2, caption = "Vectores más significativos de la segunda dimensión en el conjunto de datos") %>%
+  kable_styling(bootstrap_options = "condensed")
+```
+
+
+Como se puede apreciar y se ha mencionado con anterioridad, la variable **'aphilicity' es el predictor que más información arroja en la primera componente principal**, seguido de 'proteindeformation' y de 'GC', aunque este último ya con una bajada considerable de la varianza (0.6862897).
+
+Si se observan ahora los resultados de la segunda componente principal, se puede observar que **el predictor que más información arroja a la segunda componente principal es 'GA'**, con una varianza de 0.6224029, tal y como se puede visualizar en el gráfico anterior (*Gráfico de las variables por PCA*).
+
+### UMAP
+El UMAP es una de las técnicas más usada el la actualidad junto con t-SNE para la reducción de la dimensionalidad para visualización. En algunos casos es más efectiva que t-SNE, más eficiente computacionalmente y mejor escalable para un número grande de dimensiones.
+
+Para poder aplicar este tipo de reducción de dimensionalidad hay que utilizar la función `umap()`, del paquete del mismo nombre. 
+
+A continuación se mostrarán los resultados obtenidos tras realizar el `umap()`en los datos que se utilizan en el estudio.
+
+```{r}
+# Los datos son convertidos en una matriz
+datos_matriz <- as.matrix(datos_filtradosyescalados_cor_completos[2:29])
+```
+
+```{r, warning=FALSE, eval=FALSE}
+# Se realiza el umap
+umap_resultados <- umap(datos_matriz)
+# Summary del umap
+summary(umap_resultados)
+```
+```{r}
+umap_resultados <- readRDS("./umap_resultados.RDS")
+```
+
+Una vez obtenidos los resultados se va a proceder a la representación gráfica del umap:
+
+```{r, warning=FALSE}
+# Representación gráfica de umap
+colnames(umap_resultados$layout) = c("Dim1","Dim2")
+umapaxes_a = as.data.frame(umap_resultados$layout)%>% mutate(class=datos_filtradosyescalados_cor_completos$class)
+umapaxes_b = cbind(State = datos_completos_escalados_cor_sinpolyA$class,umapaxes_a)
+ggplot(umapaxes_b, aes(Dim1, Dim2, color=State,fill=State, alpha=0.6)) + 
+  modelr::geom_ref_line(h = 0) +
+  modelr::geom_ref_line(v = 0) +
+  scale_y_continuous(name = "Dim2", limits = c(-9,10))+
+  scale_x_continuous(name = "Dim1", limits = c(-9,10))+
+  geom_point() + scale_shape(solid=F) +
+  scale_color_brewer(palette = "Set2") +
+  ggtitle("UMAP") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  theme(plot.title=element_text(hjust=0.5, size=rel(1.5)), panel.grid = element_blank())
+```
+
+UMAP intenta encontrar una representación (no lineal) de pocas dimensiones de los datos que preserve las distancias entre cada puntos y sus vecinos en el espacio multi-dimensional. Aunque UMAP tiende a encontrar clusters visualmente más compactos, si se aprecia la representación anterior se puede obtener poca información, ya que las clases se encuentran muy centradas en el gráfico y solapadas entre sí, por lo que no se distingue diferenciación alguna.
+
+## División del dataset
+
+Para encarar la segunda parte del estudio, que consta de la realización de los modelos de predicción de machine learning que van a hacer posible distinguir entre regiones 3-UTR de las que no lo son, es necesario hacer una selección de variables. Antes de esto, **se va a proceder a dividir el dataset principal según dos características: 3-UTR y NO 3-UTR**.
+
+Se toma esta decisión debido a que el objetivo es la predicción de regiones 3-UTR de las que no lo son, por lo que es indiferente que dentro de las regiones que no son UTR el modelo distinga entre otras clases. Se creará este subconjunto con el objetivo de tener un mayor ahorro computacional y para poder responder de una forma más clara la incógnita principal.
+
+```{r}
+#Creación de subconjunto de datos en dos clases: 3UTR y no 3UTR
+datos_3UTR <- datos_filtradosyescalados_cor_completos
+datos_3UTR$class<-factor(datos_3UTR$class, levels = c( "UTR","5-UTR", "ICE", "lncRNA", "ncRNA", "pseudoGene"), labels=c("3-UTR","No-3UTR", "No-3UTR", "No-3UTR", "No-3UTR", "No-3UTR"))
+```
+
+```{r}
+datos_3UTR <- readRDS("./datos_3UTR.RDS")
+```
+
+De esta forma se obtiene un subconjunto de datos que distingue **dos únicas clases de entre los datos: 3-UTR y No-3UTR**.
+
+## Selección de variables
+
+Este apartado corresponde a la selección de variables a estudiar en el futuro de este análisis, con el objetivo de eliminar aquellas que no aporten ningún valor al conjunto de datos.
+
+Previamente se ha procedido a la eliminación de variables con **varianza cercana a 0**, así como a la eliminación de las **variables altamente correlacionadas**. Esto también evita introducir información redundante al modelo y puede mejorar la precisión del mismo. También se ha trabajado hasta el momento con datos centrados y escalados.
+
+Se va a realizar primero una **selección recursiva de variables** y tras esto, una **selección por filtro de variables**. La selección recursiva de variables se usa debido a que es fácil de configurar y usar y porque es eficaz, mientras que la selección por filtro de variables se usa para filtrar las columnas redundantes del modelo y para comparar los resultados que se obtienen de dicho método con el de selección recursiva de variables.
+
+### Selección recursiva de variables
+
+En primer lugar se va a proceder a eliminar aquellas variables que no tengan ningún valor a la hora de predecir el tipo de región a la que pertenecen. Para este cometido se va a emplear el paquete `Caret` y la función `rfe()`. Esta herramienta va a seleccionar de forma recursiva las variables que de verdad son útiles para predecir. 
+
+Se van a seleccionar los hiperparámetros y parámetros que van a determinar el funcionamiento del análisis. En primer lugar hay que especificar el algoritmo que se va a usar, siendo en este caso `treebagFuncs`, ya que permite mejorar la precisión del modelo. El método que se va a utilizar para evitar el *overfitting* y obtener el mejor modelo en este caso es *crossvalidation*.
+
+Además de esos parámetros, hay que seleccionar las distintas semillas a utilizar y el número de *folds* que van a ser necesario a la hora de realizar el modelo. En este caso se han realizado 10 folds. También es necesario elegir el rango del **número de variables que van a ser elegidas en cada caso**. Se ha decidido ir de un mínimo de 3 al total de variables.
+
+Este paso del análisis se va a realizar de forma paralela utilizando 5 núcleos en cada tarea, reduciendo de forma significativa el tiempo que tarda en procesar los datos.
+
+Al final de este proceso se obtendrán las variables elegidas por que aportan información al modelo y se podrán eliminar del conjunto de datos.
+
+
+```{r, eval=FALSE}
+# Paralelización del proceso
+cl <- makeCluster(5)
+registerDoParallel(cl)
+
+# Parámetros de selección recursiva de variables
+subsets <- c(3:(ncol(datos_3UTR) - 1))
+seeds <- vector(mode = "list", length = 6)
+for(i in 1:10) seeds[[i]] <- sample.int(1000, length(subsets) + 1)
+seeds[[11]] <- sample.int(1000, 1)
+
+control_seleccion <- rfeControl(functions=treebagFuncs, 
+                                     method = "cv", 
+                                     number = 10, 
+                                     seeds = seeds,
+                                     returnResamp="final", 
+                                     verbose = TRUE,
+                                     allowParallel = TRUE)
+
+# Selección de variables recursivas
+if (file.exists("modelo_seleccion_recursiva")) {
+    modelo_seleccion_recursiva <- readRDS("modelo_seleccion_recursiva")
+} else {
+    modelo_seleccion_recursiva <- rfe(class~., data=datos_3UTR, 
+        sizes = subsets, rfeControl = control_seleccion)
+    saveRDS(modelo_seleccion_recursiva, "modelo_seleccion_recursiva")
+}
+
+modelo_seleccion_recursiva$fit = NULL
+```
+
+```{r}
+modelo_seleccion_recursiva <- readRDS("./modelo_seleccion_recursiva.RDS")
+```
+
+```{r}
+# Variables significativas tras selección recursiva de variables
+variables_significativas_recursiva <- modelo_seleccion_recursiva$optVariables
+
+# Variables que mejor clasifican el conjunto de entrenamiento
+variables_significativas_recursiva
+```
+
+La variable `modelo_seleccion_recursiva` indica que el **mejor clasificador que clasifica los objetos del conjunto de entrenamiento contiene 24 variables**. Dichas variables quedan almacenadas en el atributo `optVariables`.
+
+Los resultados del proceso de selección de variables también pueden ser mostrados por medio de gráficas:
+
+```{r}
+# Representación de resultados tras selección recursiva de variables
+plot(modelo_seleccion_recursiva, col="lightcoral", main="Selección recursiva de variables")
+```
+
+En la gráfica se enfrentan las variables seleccionadas y el punto de corte con el accuracy. De las 29, 24 variables sería lo más óptimo según el algoritmo de clasificación.
+
+### Selección de variables por filtros
+
+Además de la selección recursiva, se va a utilizar el **método de selección por filtro** para poder tener alguna referencia extra a la hora de seleccionar las variables. Para ello se hará uso de la función `sbf` de `caret`, siguiendo un procedimiento similar al anterior. Esta función implementa un test estadístico, que trata de encontrar aquellas variables que presentan diferencias significativas estadísticamente entre las distintas clases o el resultado.
+
+El procedimiento que se sigue es similar al del caso anterior:
+
+```{r, eval=FALSE}
+# Paralelización del proceso
+cl <- makeCluster(5)
+registerDoParallel(cl)
+
+# Parámetros de selección de variables por filtros
+ctrl.ranker.cv.10 <- sbfControl(functions = treebagSBF,
+                                method = "cv", number = 10,
+                                seeds = NULL)
+
+# Selección de variables por filtros
+if (file.exists("modelo_seleccion_filtro")) {
+    modelo_seleccion_filtro <- readRDS("modelo_seleccion_filtro")
+} else {
+    modelo_seleccion_filtro <- sbf(class~., data=datos_3UTR, 
+                            sbfControl = ctrl.ranker.cv.10)
+    saveRDS(modelo_seleccion_filtro, "modelo_seleccion_filtro")
+}
+
+modelo_seleccion_filtro$fit = NULL
+```
+
+```{r}
+modelo_seleccion_filtro <- readRDS("./modelo_seleccion_filtro.RDS")
+```
+
+```{r}
+# Variables significativas tras selección de variables por filtros
+variables_significativas_filtro <- modelo_seleccion_filtro$optVariables
+
+# Variables que mejor clasifican el conjunto de entrenamiento
+variables_significativas_filtro
+```
+
+En el caso de la selección de variables por filtro, como se puede observar, se seleccionan todas las variables disponibles.
+
+
+### Comparación de selección de variables
+Una vez se generan los modelos de selección de variables se puede proceder a su comparación estadística, y mediante un diagrama de Venn, comparar qué variables son las que varían dependiendo del modelo (recursivo o por filtro).
+
+```{r}
+# Estadísticos de selección recursiva de variables
+kable(modelo_seleccion_recursiva$results[modelo_seleccion_recursiva$results == modelo_seleccion_recursiva$optsize, 
+    ], caption = "Estadísticos de selección recursiva de variables") %>%
+  kable_styling(bootstrap_options = "condensed")
+```
+```{r}
+# Estadísticos de selección por filtro de variables
+kable(modelo_seleccion_filtro$results, caption="Estadísticos de selección por filtro de variables") %>%
+  kable_styling(bootstrap_options = "condensed")
+```
+
+Como se puede observar, la *Accuracy* (porcentaje de casos que el modelo ha acertado) es ligeramente mejor en el modelo de selección recursiva de variables que en el de selección de variables por filtro. La diferencia es muy poco notoria, por lo que se puede concluir que ambos modelos son muy buenos.
+
+Si se observan los valores de *Kappa* (mide la fiabilidad de los calificadores) tampoco se observa una diferencia notoria, aunque los valores de Kappa en el caso de la selección recursiva de variables es mejor que en el caso de la selección de variables por filtro, comportándose de forma similar a lo que sucede en el caso de los valores de *Accuracy*.
+
+Como conclusión, destacar que la selección recursiva de variables presente mejores valores de accuracy y kappa que la selección por filtro de variables y que además esta primera no selecciona cinco variables frente a la selección de variables por filtro que selecciona todas las variables. Se considera entonces que esta **selección recursiva de variables es mejor que la de filtro y las variables que este método tiene en consideración serán las seleccionadas para futuros análisis**.
+
+```{r}
+# Comparación de selección de variables entre selección recursiva y por filtro
+comparacion_significativas_2modelos = list(recursiva = variables_significativas_recursiva, filtro = variables_significativas_filtro)
+
+venn(comparacion_significativas_2modelos, ilab = TRUE, zcolor = "style", 
+    box = F, cex.main=0.5)
+title("\nComparación de métodos de selección de variables")
+```
+
+Como se puede apreciar en la representación anterior **hay una clara diferencias entre el método de selección recursiva de variables y el método de selección por filtro de variables, ya que el método de selección recursiva de variables no selecciona cinco variables que el método de selección por filtro de variables sí**, por lo que se puede concluir que la selección por filtro de variables arroja un mejor resultado y será la que se tenga en consideración para llevar a cabo la segunda parte del estudio, en la que se llevará a cabo la realización de los modelos.
+
+### Análisis de resultados de selección de variables
+
+Tras tomar la decisión de adoptar los resultados obtenidos de la selección recursiva de variables para la realización de los modelos posteriormente, se pueden observar las variables escogidas por dicho método e intentar encontrar un **sentido biológico a la relación de las mismas con las regiones 3'-UTR**.
+
+Como se vio en el análisis de correlación, en el modelo 3'-UTR, la única variable de todas que NO estaba correlacionada era 'cpnpgislands'. Estas regiones son regiones de DNA donde un nucleótido de citosina es seguido por un nucleótido de guanina en la secuencia lineal de bases a lo largo de su dirección 5' → 3'. En humanos, alrededor del 70% de los promotores ubicados cerca del sitio de inicio de la transcripción de un gen contienen una isla CpG [@saxonov2006genome].
+Tiene sentido entonces que esta variable resulte de utilidad para detectar la no presencia de 3'-UTR a priori, ya que su ubicación en el genoma suele ser la opuesta a donde se encontraría un 3'-UTR. 
+Estas islas CpG se caracterizan por mostrar un nucleótido de citosina seguido de otro de guanina a lo largo de su dirección 5' → 3'. Es por esto que otros predictores importantes señalados son 'CG', 'C' y 'G'.
+
+Por otro lado también cabe destacar la implicación de la cola PolyA en la identificación de las regiones 3'-UTR. Esto es debido a que seguida de estas regiones 3'-UTR se puede encontrar la presencia de esta otra región no traducida, la cola PolyA, como se puede ver en la Figura expuesta a continuación. Es por esto por lo que resulta un predictor muy importante a la hora de identificar estas regiones 3'-UTR.
+
+![mRNA de una proteína típica humana incluyendo las regiones no traducidas](figura2.png) 
+
+Otro predictor importante es 'proteindeformation', ya que las regiones 3'-UTR está implicadas en la correcta formación de proteínas [@mayr2017regulation], al igual que pasa con las variables 'bendability' y 'aphilicity', que son propiedades topológicas y termodinámicas que se asocian a las proteínas y que también están muy relacionadas con estas regiones 3'-UTR por este mismo motivo: la correcta formación de las proteínas.
+
+# Referencias 
