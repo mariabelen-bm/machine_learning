@@ -42,7 +42,7 @@ Este estudio se va a dividir en dos partes:
 
 * La **segunda parte** del estudio corresponde a la **obtención de los modelos de machine learning que van a hacer posible en principio responder a la pregunta de si es posible identificar 3’ UTRS en el genoma humano**.
 
-Esta entrega corresponde a la **primera parte del estudio**.
+PRIMERA PARTE
 
 # Pasos previos
 
@@ -65,9 +65,6 @@ library(caret)
 library(dplyr)
 library(kableExtra)
 library(ggcorrplot)
-library(ggplot2)
-library(reshape)
-library(dplyr)
 library(corrplot)
 library(caret)
 library(psych)
@@ -80,11 +77,29 @@ library(DT)
 library(Epi)
 library(nortest)
 library(gridExtra)
-library(tidyverse)
 library(FactoMineR)
 library(factoextra)
 library(umap)
 library(venn)
+library(ggplot2)
+library(reshape)
+library(foreach)
+library(iterators)
+library(doParallel)
+library(DT)
+library(Epi)
+library(nortest)
+library(lubridate)
+library(keras)
+library(tensorflow)
+library(reticulate)
+library(partykit)
+library(rattle)
+library(pROC)
+library(coin)
+library(PMCMRplus)
+library(ez)
+library(car)
 
 knitr.table.format = "html"
 ```
@@ -1132,5 +1147,1063 @@ Por otro lado también cabe destacar la implicación de la cola PolyA en la iden
 ![mRNA de una proteína típica humana incluyendo las regiones no traducidas](figura2.png) 
 
 Otro predictor importante es 'proteindeformation', ya que las regiones 3'-UTR está implicadas en la correcta formación de proteínas [@mayr2017regulation], al igual que pasa con las variables 'bendability' y 'aphilicity', que son propiedades topológicas y termodinámicas que se asocian a las proteínas y que también están muy relacionadas con estas regiones 3'-UTR por este mismo motivo: la correcta formación de las proteínas.
+
+SEGUNDA PARTE
+
+## Obtención y preparación de los datos
+Para realizar la segunda parte del estudio va a ser necesario cargar los datos generados previamente en la entrega 1 del estudio que hacen referencia al dataset inicial dividido en dos únicas clases: 3'-UTR y NO 3'-UTR. 
+
+Estos son los datos que interesa introducir en los modelos que se realizarán posteriormente, con el objetivo de poder predeccir la presencia de este tipo de regiones en el genoma humano.
+
+```{r}
+# Datos necesarios
+datos_3UTR <- readRDS("./datos_3UTR.RDS")
+datos_3UTR$class<-factor(datos_3UTR$class, levels = c("3-UTR","No-3UTR"), labels=c("Si3UTR","No3UTR"))
+```
+
+### División del dataset en train y test
+
+Una vez cargados los datos hay que tener en cuenta la necesidad de seleccionar aquellas variables que el método de selección recursiva de variables indicó que eran las óptimas, así como dividir los datos en un **subconjuntos de entrenamiento y subconjuntos de test** con el fin de poder pasar posteriormente a la realización de los modelos.
+
+* Los **datos de entrenamiento** o *training data* son los datos que se usan para entrenar el modelo, y la calidad de los futuros modelos de aprendizaje automático va a ser directamente proporcionales a la calidad de estos datos.
+
+* Por otro lado, los **datos de prueba**, validación o *testing data* son los datos que se reservan para comprobar si el modelo que se ha generado a partir de los datos de entrenamiento funciona. Es decir, si las respuestas predichas por el modelo para un caso son acertadas o no.
+
+Normalmente el conjunto de datos se suele repartir en un 70-80% de datos de entrenamiento y un 30-20% de datos de test. Lo importante es ser siempre conscientes de que hay que evitar el sobreajuste u *overfitting*. El *overfitting* es el efecto de sobreentrenar un algoritmo de aprendizaje con unos ciertos datos para los que se conoce el resultado deseado.
+
+En este caso y para este estudio particular se decidió dividir los datos en un 80% de entrenamiento y un 20% de test. Para ello se utilizó la función `createDataPartition` de `Caret`, que permite mantener la misma proporción de los datos en los dos subconjuntos. 
+
+```{r, eval=FALSE}
+# Lectura del modelo de selección recursiva de variables
+modelo_seleccion_recursiva <- readRDS("./modelo_seleccion_recursiva.RDS")
+```
+
+
+```{r, warning=FALSE, eval=FALSE}
+set.seed(123)
+# Se seleccionan las variables seleccionadas por el método de selección recursiva
+significativas_modelo_recursivo <- modelo_seleccion_recursiva$optVariables
+significativas_modelo_recursivo <- c("polyA_signal", significativas_modelo_recursivo[-3])
+
+datos_seleccion_de_variables = dplyr::select(datos_3UTR, all_of(significativas_modelo_recursivo), class)
+
+# Se dividen los datos en train y test
+trainIndex <- createDataPartition(datos_seleccion_de_variables$class, p=0.8,list = FALSE, times = 1)
+datos3UTR_train <- datos_seleccion_de_variables[trainIndex,]
+datos3UTR_test <- datos_seleccion_de_variables[-trainIndex,]
+```
+
+```{r}
+datos3UTR_train <- readRDS("./datos3UTR_train.RDS")
+datos3UTR_test <- readRDS("./datos3UTR_test.RDS")
+```
+
+### Desbalanceo de los datos
+
+Con anterioridad, en la entrega 1, se habló del claro desbalanceo que muestran los datos que se presentan en este estudio. Un conjunto de **datos desbalanceado es uno donde el número de observaciones pertenecientes a un grupo o clase es significativamente mayor que las pertenecientes a las otras clases**. 
+
+En el dataset usado en el estudio se puede ver una clara diferencia entre las dos clases presentes, ya que **predomina la No presencia de 3-UTR (clase No3UTR) frente a la presencia de 3-UTR (clase SiUTR)**:
+
+```{r}
+# Datos sin balancear
+datos_sin_balancear <- table(datos_3UTR$class)
+knitr::kable(datos_sin_balancear, caption = "Tipo de clase",col.names = c("Clases", "Frecuencia")) %>% kable_styling(bootstrap_options = "condensed")
+```
+
+
+Este problema se debe solucionar, ya que este fenómeno provoca un desbalanceo en los datos que se utilizan para el entrenamiento de los modelos, y por lo general, afecta a los algoritmos en su proceso de generalización de la información, perjudicando a las clases minoritarias.
+
+En esta ocasión se ha decidido utilizar las funciones `downSample` y `upSample`, que muestrearán aleatoriamente de forma totalmente inversa: en el caso `downSample`, muestreará el conjunto de datos para que todas las clases tengan la **misma frecuencia que la clase minoritaria** (disminuye la clase mayoritaria a favor de la minoritaria), y así solucionar este problema de desbalanceo de los datos, mientras `upSample` muestrerá para hacer que la clase minoritaria alcance la misma frecuencia que la clase mayoritaria. Al aplicar ambos métodos se verá que el resultado de `downSample` reduce el número de muestras mientras que `upSample`, por el contrario, las aumentará.
+
+Cabe destacar que este proceso se llevará a cabo **con los datos con los que se va a entrenar los modelos**, ya que son los datos que se necesita que estén balanceados por lo expuesto con anterioridad.
+
+```{r, eval=FALSE}
+# Balanceo de los datos 
+datos3UTRtrain_down <- downSample(datos3UTR_train[, -ncol(datos3UTR_train)], datos3UTR_train$class)
+datos3UTRtrain_up <- upSample(datos3UTR_train[, -ncol(datos3UTR_train)], datos3UTR_train$class)
+```
+
+```{r}
+datos3UTRtrain_down <- readRDS("./datos3UTRtrain_down.RDS")
+datos3UTRtrain_up <- readRDS("./datos3UTRtrain_up.RDS")
+```
+
+
+```{r}
+# Tabla de los datos balanceados
+
+  # downSample
+down <- table(datos3UTRtrain_down$Class)
+knitr::kable(down, caption = "Número de clases con downSample",col.names = c("Clases", "Frecuencia")) %>% kable_styling(bootstrap_options = "condensed")
+
+  # upSample
+up <- table(datos3UTRtrain_up$Class)
+knitr::kable(up, caption = "Número de clases con upSample",col.names = c("Clases", "Frecuencia")) %>% kable_styling(bootstrap_options = "condensed")
+
+```
+
+Como se dijo anteriormente, si se observan los datos resultantes tras aplicar `downSample`, se ve cómo se reduce significativamente el tamaño de los datos, ya que se pasa de 179968 observaciones a 28352 en total, lo que afectará positivamente al tiempo de cómputo de los modelos que se realizarán posteriormente. Por otro lado, como se observa, en el caso de aplicar `upSample`, se pasa de 179968 observaciones a 259600 observaciones, aumentando significativamente el número de muestras. Esto afectará negativamente al tiempo de cómputo en los modelos que se implementarán posteriormente.
+
+A continuación se muestran dos barplot con las proporciones relativas de ambos balanceos. Se podrá comprobar que pese a afectar al número de muestras de forma distinta, se consigue el balanceo de los datos en ambos casos de forma satisfactoria:
+
+```{r}
+# Frecuencia relativa de los datos balanceados
+balanceo_relativo_down <- prop.table(down)
+balanceo_relativo_up <- prop.table(up)
+
+# Representación de la distribución de clases en frecuencia relativa
+barplot(balanceo_relativo_down, col = palette("Pastel 1"), ylab ="Frecuencias Relativa", ylim = c(0, 1), main = "Distribución de clases - downSample")
+
+barplot(balanceo_relativo_up, col = palette("Pastel 1"), ylab ="Frecuencias Relativa", ylim = c(0, 1), main = "Distribución de clases - upSample")
+```
+
+Como se puede comprobar los histogramas anteriores, **se ha producido el balanceo de los datos de forma satisfactoria en ambos casos**, ya que en este momento se tiene la **misma frecuencia de datos de clase 3-UTR que de clase No-3UTR**. 
+
+# Desarrollo - Segunda entrega
+
+Esta parte del estudio se va a centrar en la **generación de modelos de machine learning, su evaluación y la selección del mejor modelo final**. Se debe responder a las siguientes cuestiones:
+
+* Determinar cuál es el mejor algoritmo de predicción y por qué.
+* Para cada algoritmo que se use, determinar la estrategia de optimización de hiperparámetros usada, el significado de cada hiperparámetro considerado, su configuración de caret por defecto y cómo se ha decidido configurarlos.
+* Qué medidas de rendimiento se han elegido para reportar y decidir el mejor modelo y qué estrategia de remuestreo se ha seguido para obtener buenos estimadores de las medidas de rendimiento.
+* Cuál es el mejor algoritmo para este problema y por qué.
+* Una vez seleccionado el mejor modelo, determinar cuáles son las *features* o predictores más relevantes para el modelo seleccionado. Si el mejor modelo no permite determinar la importancia de las variables, se debe escoger el mejor modelo que lo permita y responder a esta pregunta.
+
+## Realización de los modelos
+
+A partir de los predictores seleccionadas en la anterior parte del estudio, y con los datos divididos en train y test como se procedió anteriormente, se elaborarán modelos basados en **random forests** y modelos de **deep learning**, así como otros modelos que resulten de interés, con el objetivo de poder responder a través de ellos a la pregunta inicial de si es posible distinguir regiones 3'-UTR en el genoma humano.
+
+Los modelos de Random forest y de Deep learning se generarán con los datos balanceados mediante `downSample` y con los datos balanceados con `upSample` con el objetivo de comparar el rendimiento de los modelos dependiendo del tipo de balanceo que se le dio a los datos. El resto de modelos que se presentarán, sólo se realizaron con los datos balanceados mediante downSample, ya que este conjunto de datos posee menos de la mitad de muestras que el balanceado con upSample y eso facilitará el tiempo de cómputo y generación de los modelos. 
+
+Se expondrán las diferencias entre el Random forest y el Deep learning dependiendo del conjunto de datos, así como también las diferencias entre los dos mejores modelos, pero en este caso, solo con el conjunto de datos balanceado mediante `downSample`.
+
+### Random forest
+
+**Random forest** es un algoritmo de aprendizaje automático supervisado muy usado en problemas de clasificación y regresión . Este algoritmo construye árboles de decisión en diferentes muestras y toma su voto mayoritario para la clasificación y el promedio en caso de regresión [@azar2014random].
+
+Una de las características más importantes del Random Forest es que puede manejar un conjunto de datos que contenga variables continuas como en el caso de la regresión y variables categóricas como en el caso de la clasificación. **Ofrece mejores resultados para problemas de clasificación, como es el caso de este estudio**, por lo que será un buen algoritmo para conseguir el objetivo planteado.
+
+Para generar el modelo final de Random forest, se utilizará el algoritmo `ranger`, una implementación rápida de los Random forest, adecuada para datos dimensionales y para problemas de clasificación. Es un tipo de función que permite la modificación de los parámetros `mtry`, `splitrule` y `min.node.size`.
+
+Se buscará entonces información de los valores por defecto de los parámetros de dicho algoritmo:
+
+```{r}
+# Información sobre algoritmo `ranger`
+getModelInfo("ranger")$ranger$grid
+```
+Como se ve, en los valores por defecto de `ranger`, el tamaño mínimo de los nodos es 1 y el valor de splitrule "gini" si se quiere predecir sobre variables categóricas, como es el caso de este estudio. 
+
+Se definirán ahora los parámetros:
+
+* `mtry`: número predictores seleccionados aleatoriamente en cada árbol.
+* `splitrule`: criterio de división. Para la clasificación y estimación de probabilidad usa "gini", "extratrees" o "hellinger", con "gini" por defecto. Para la regresión, usa "varianza", "extratrees", "maxstat" o "beta", con "varianza" por defecto. Para la supervivencia, usa "logrank", "extratrees", "C" o "maxstat" con "logrank" por defecto.
+* `min.node.size`: Tamaño mínimo del nodo. Por defecto usa 1 para clasificación, 5 para regresión, 3 para supervivencia
+y 10 para probabilidad.
+
+```{r}
+# Parámetros que requiere un ranger forest
+ranger <- table(modelLookup("ranger"))
+knitr::kable(ranger, caption="Hiperparámetros que requiere un Ranger forest") %>% kable_styling(bootstrap_options = "condensed")
+```
+Aunque se obtuvo información relativa a los parámetros necesarios para implementar en este algoritmo, se decidió utilizar la función `tuneLength`. Esta función permite la automatización del proceso para encontrar la mejor combinación de parámetros. Lo que hace es indicar al algoritmo que pruebe diferentes valores por defecto para el parámetro principal y encuentra el mejor. Se ha seleccionado que esta función pruebe un máximo de 10 combinaciones de estos hiperparámetros, aunque esto depende del número de predictores y tamaño de los datos.
+
+Mediante *trainControl* se selecciona el método para evitar el sobreajuste. En este caso se usó *cross-validation* y con 10 folders. *Cross-validation* es una técnica utilizada para evaluar los resultados de un análisis estadístico y que garantiza que son independientes de la partición entre datos de entrenamiento y prueba [@a2019evaluation]. Esta técnica ya se usó anteriormente en la primera parte del estudio.
+
+Por último, destacar que se paralelizó el proceso usando 5 núcleos.
+
+```{r}
+# Ranger forest de datos de entrenamiento balanceados con downSample
+cl <- makeCluster(5)
+registerDoParallel(cl)
+
+set.seed(123)
+random_forest_control <- trainControl(method = "cv", number = 10, 
+                                      returnResamp = "final", verboseIter = T, allowParallel = T)
+
+set.seed(123)
+if (file.exists("rangerforest_downSample")) {
+  rangerforest_downSample <- readRDS("rangerforest_downSample")
+} else {
+  rangerforest_downSample <- caret::train(Class ~ ., data = datos3UTRtrain_down, method = "ranger", 
+                                       tuneLength = 10, trControl = random_forest_control)
+  saveRDS(rangerforest_downSample, "rangerforest_downSample")
+}
+```
+
+A continuación, se van a exponer los resultados obtenidos, los mejores ajustes que ha encontrado el algoritmo para los hiperparámetros y la representación gráfica de estos resultados: 
+
+```{r}
+# Resultados obtenidos 
+print(rangerforest_downSample)
+```
+
+```{r}
+# Mejores ajustes de hiperparámetros
+knitr::kable(rangerforest_downSample$bestTune, caption="Mejores ajustes de hiperparámetros") %>% kable_styling(bootstrap_options = "condensed")
+```
+
+```{r}
+# Representación gráfica de Ranger forest con datos balanceados con downSample
+ggplot(rangerforest_downSample, highlight = TRUE) +
+  scale_x_continuous(breaks = 1:30) +
+  labs(title = "Evolución del accuracy del modelo Random Forest") +
+  guides(color = guide_legend(title = "mtry"),
+         shape = guide_legend(title = "mtry")) +
+  theme_classic()
+```
+
+
+Estos resultados indican que usando *Ranger forest* con `mtry`=6, `min.node.size`= 1 y `splitrule` = "gini", se consigue un *accuracy* promedio de validación del 94% en el caso de los datos balanceados con `downSample`, siendo este un muy buen resultado.
+
+A continuación se va a proceder a la implementación del algoritmo con los datos balanceados mediante `upSample` de la misma forma:
+
+```{r}
+# Ranger forest de datos de entrenamiento balanceados con upSample 
+cl <- makeCluster(5)
+registerDoParallel(cl)
+
+set.seed(123)
+
+random_forest_control <- trainControl(method = "cv", number = 10, 
+    returnResamp = "final", verboseIter = T, allowParallel = T)
+
+set.seed(123)
+if (file.exists("rangerforest_upSample")) {
+    rangerforest_upSample <- readRDS("rangerforest_upSample")
+} else {
+    rangerforest_upSample <- caret::train(Class ~ ., data = datos3UTRtrain_up, method = "ranger", 
+        tuneLength = 10, trControl = random_forest_control)
+    saveRDS(rangerforest_upSample, "rangerforest_upSample")
+}
+```
+
+A continuación, se van a exponer los resultados obtenidos, los mejores ajustes que ha encontrado el algoritmo para los hiperparámetros y la representación gráfica de estos resultados: 
+
+```{r}
+# Resultados obtenidos 
+print(rangerforest_upSample)
+```
+
+```{r}
+# Mejores ajustes de hiperparámetros
+knitr::kable(rangerforest_upSample$bestTune, caption="Mejores ajustes de hiperparámetros") %>% kable_styling(bootstrap_options = "condensed")
+```
+
+```{r}
+# Representación gráfica de Ranger forest con datos balanceados con downSample
+ggplot(rangerforest_upSample, highlight = TRUE) +
+  scale_x_continuous(breaks = 1:30) +
+  labs(title = "Evolución del accuracy del modelo Random Forest") +
+  guides(color = guide_legend(title = "mtry"),
+         shape = guide_legend(title = "mtry")) +
+  theme_classic()
+```
+
+Estos resultados indican que usando *Ranger forest* con `mtry=2`, `min.node.size= 1` y `splitrule = "gini"`, se consigue un *accuracy* promedio de validación del 99% en el caso de los datos balanceados con `upSample`, siendo este un resultado casi perfecto.
+
+### Deep learning 
+
+El **Deep learning** es un tipo de *machine learning* que entrena a una computadora para que realice tareas como las propias del ser humano, como por ejemplo, el reconocimiento del habla, la identificación de imágenes o hacer predicciones. En lugar de organizar datos para que se ejecuten a través de ecuaciones predefinidas, el Deep learning configura parámetros básicos acerca de los datos y entrena a la computadora para que aprenda por cuenta propia reconociendo patrones mediante el uso de muchas capas de procesamiento [@min2017deep].
+
+El paquete `Caret` dispone de distintas funciones que permiten realizar una optimización de reeds neuronales. En este caso en particular se va a hacer uso del algoritmo `mlpKerasDropout` por simplicidad. 
+
+A continuación se procede a presentar información sobre este algoritmo, el cómo se implementa y sus valores por defecto:
+
+```{r}
+# Información sobre algoritmo `mlpKerasDropout`
+getModelInfo("mlpKerasDropout")$mlpKerasDropout$grid
+```
+
+En la ejecución anterior se pueden apreciar los valores por defecto que toma el algoritmo `mlpKerasDropout` en todos sus hiperparámetros: `size = ((1:len) * 2) - 1, dropout = seq(0, 0.7, length = len), batch_size = floor(nrow(x)/3), lr = 2e-06, rho = 0.9, decay = 0, activation = "relu"`.
+
+En este caso particular de implementación de este algoritmo se va a hacer uso de `tuneGrid` para la definición de los distintos hiperparámetros que se deben escoger para generar el mejor modelo posible. En este caso, antes de definir el modelo definitivo, se realizaron diferentes pruebas modificando cada uno de los hiperparámetros haciendo un proceso de optimización de la red, partiendo de los valores que toma el algoritmo como preedefinidos para este caso, llegando a modificar cada uno de ellos para ver cómo iba mejorando los valores de accuracy del modelo.
+
+Los hiperparámetros de este algoritmo son: `size`, `dropout`, `batch_size`, `lr`, `rho`, `decay`, y `activation`. Todos ellos son parámetros numéricos, excepto el último (`activation`), que es *character*.
+
+```{r}
+# Hiperparámetros para el algoritmo MLP con dropout
+mdropout <- getModelInfo("mlpKerasDropout")
+knitr::kable(mdropout$mlpKerasDropout$parameters,caption="Hiperparámetros para el algoritmo MLP con dropout") %>% 
+  kable_styling(bootstrap_options = "condensed")
+```
+
+* `size`: número de nodos.
+* `dropout`: ratio de dropout. El dropout implica que se ignoren neuronas seleccionadas al azar durante el entrenamiento. Se "abandonan" aleatoriamente.
+* `batch_size`: el tamaño de cada lote antes de actualizar los pesos de la red. Por defecto se toma un tercio de los ejemplares del conjunto que se utiliza para el training.
+* `lr`: el ratio de aprendizaje.
+* `rho`: atenúa la influencia del gradiente pasado. Es similar al impulso y se relaciona con la memoria de las actualizaciones de peso anteriores.
+* `decay`: decaimiento de la tasa de aprendizaje
+* `activation`: tipo de activación a la salida. Puede ser: `sigmoid`, `relu` y `tanh`.
+
+Los hiperparámetros escogidos finalmente para generar este modelo fueron: `size = 12`, `dropout = 0.1`, `batch_size = 5`, `lr = (0.5*1e-2)`,`rho = 0`,`decay = 0` y `activation = "relu"`. Con estos hiperparámetros se consigue la mejor optimización probada.
+
+El parámetro `epoch` (épocas) va a tener un valor de 10 El número de épocas es un hiperparámetro que define el número de veces que el algoritmo de aprendizaje funcionará en todo el conjunto de datos de entrenamiento. Una época significa que cada muestra en el conjunto de datos de entrenamiento ha tenido la oportunidad de actualizar los parámetros del modelo interno. Se suele seleccionar un valor de 10 para este hiperparámetro.
+
+De nuevo se usa *cross-validation* con 10 folders.
+
+En este caso no se utilizó multicore para agilizar la ejecución del proceso porque resulta contraproducente su uso cuando se emplea este algoritmo de Deep learning.
+
+```{r, eval=FALSE}
+# Deep learning de datos de entrenamiento balanceados con downSample
+Sys.setenv(RETICULATE_PYTHON="/usr/bin/python3.8")
+
+set.seed(123)
+
+deep_learning_control = trainControl(method="cv",
+                       number=10,
+                       search = "grid",
+                       classProbs = T)
+
+mygrid = expand.grid(size = 12, 
+                     dropout = 0.1, 
+                     batch_size = 5,
+                     lr = (0.5*1e-2),
+                     rho = 0,
+                     decay = 0,
+                     activation = "relu")
+
+if (file.exists("deeplearning_downSample")) {
+    deeplearning_downSample <- readRDS("deeplearning_downSample")
+} else {
+    deeplearning_downSample <- caret::train(Class ~ ., data = datos3UTRtrain_down, preProcess=c("scale","center"), 
+        tuneGrid=mygrid, trControl=deep_learning_control, method="mlpKerasDropout", epochs=10)
+    saveRDS(deeplearning_downSample, "deeplearning_downSample")
+}
+```
+
+```{r}
+# Resultados de deep learning con datos balanceados con downSample
+deeplearning_downSample <- readRDS("./deeplearning_downSample")
+deeplearning_downSample
+```
+
+Se procedió entonces a implementar el mismo algoritmo usando los datos balanceados mediante `downSample`.
+
+```{r, eval=FALSE}
+# Deep learning de datos de entrenamiento balanceados con upSample
+set.seed(123)
+
+deep_learning_control = trainControl(method="cv",
+                                     number=10,
+                                     search = "grid",
+                                     classProbs = T)
+
+mygrid = expand.grid(size = 12, 
+                     dropout = 0.1, 
+                     batch_size = 5,
+                     lr = (0.5*1e-2),
+                     rho = 0,
+                     decay = 0,
+                     activation = "relu")
+
+
+if (file.exists("deeplearning_upSample")) {
+  deeplearning_upSample <- readRDS("deeplearning_upSample")
+} else {
+  deeplearning_upSample <- caret::train(Class ~ ., data = datos3UTRtrain_up, preProcess=c("scale","center"), tuneGrid=mygrid, 
+                                         trControl=deep_learning_control, method="mlpKerasDropout", epochs=10)
+  saveRDS(deeplearning_upSample, "deeplearning_upSample")
+}
+```
+
+```{r}
+# Resultados de deep learning con datos balanceados con upSample
+deeplearning_upSample <- readRDS("./deeplearning_upSample")
+deeplearning_upSample
+```
+
+Para el caso del modelo de Deep learning con los datos balanceados mediante `downSample`, se obtiene como resultado una *Accuracy* de 93% y un valor de *Kappa* de 87% frente a los resultados obtenidos en el caso del modelo de Deep learning con los datos balanceados mediante `upSample`, en el que se obtiene un *Accuracy* de 94% y un valor de *Kappa* del 87%. 
+
+En este caso, ambos modelos tienen resultados muy similares y se puede decir que **el método de balanceo de los datos de ambas formas logra para este algoritmo resultados semejantes en cuanto a las métricas de *accuracy* y *kappa* para este conjunto de datos de estudio y este problema particular**.
+
+## Comparación de modelos
+
+Después de realizar todos los modelos, se va a proceder a su **comparación**. Para ello, se van a realizar dos tipos de comparaciones:
+
+* Se va a comparar los modelos de `Ranger forest` y `Deep learning` **dependiendo del tipo de balanceo de sus datos**: `downSample` y `upSample`. Estos dos modelos se han podido realizar con ambos tipos de datos y se va a proceder a su comparación con el fin de comprobar de entre los tipos de balanceo, cuál es el mejor resultado en ambos modelos.
+
+* Se van a comparar **los modelos de Ranger forest y Deep learning, que son los dos modelos que mejores resultados han arrojado, con los datos balanceados mediante `downSample`** con el objetivo de comprobar cuál es el mejor modelo de entre los dos.
+
+Para poder proceder a la comparación de los modelos, se va a generar la **matriz de confusión** de cada uno de ellos, usando la función `confusionMatrix`. En dichas matrices de confusión se comparan las predicciones de los modelos con sus valores reales, y permite la visualización del desempeño de un algoritmo que se emplea en aprendizaje supervisado [@visa2011confusion]. 
+
+Estas **predicciones se van a realizar sobre el subconjunto de test de los datos**, utilizando para ello la función `predict`.
+
+### Ranger forest y Deep learning con datos undersampling y oversampling
+
+#### Ranger forest con datos downSampleados y upSampleados
+
+Primero se va a usar la función `predict` para predecir nuevos datos. Esta función utiliza los datos generados previamente por la función `train()`. En concreto, la función `predict()` utiliza el modelo almacenado en *$finalModel*, que es el mejor modelo de entre los ajustados en el proceso de optimizacióna. 
+
+Tras esto, se van a generar las **matrices de confusión**:
+
+```{r}
+# Ranger forest con datos balanceados con downSample
+prediccion_ranger_down <- predict(rangerforest_downSample, datos3UTR_test, type = "raw")
+confusion_ranger_down <- confusionMatrix(prediccion_ranger_down, datos3UTR_test$class)
+resultados_confusion_ranger_down <- as.data.frame(t(confusion_ranger_down$byClass))
+matriz_confusion_ranger_down <- as.data.frame(confusion_ranger_down$table)
+
+# Ranger forest con datos balanceados con upSample
+prediccion_ranger_up <- predict(rangerforest_upSample, datos3UTR_test, type = "raw")
+confusion_ranger_up <- confusionMatrix(prediccion_ranger_up, datos3UTR_test$class)
+resultados_confusion_ranger_up <- as.data.frame(t(confusion_ranger_up$byClass))
+matriz_confusion_ranger_up <- as.data.frame(confusion_ranger_up$table)
+```
+
+A continuación, se muestran los resultados obtenidos en las matrices de confusión:
+
+```{r, echo = FALSE}
+# Resultados de matrices de confusión de Ranger forest para datos balanceados con downSample
+resultados_rangerdown <- table(resultados_confusion_ranger_down)
+knitr::kable(resultados_rangerdown, caption="Resultados Ranger forest - downSample") %>% kable_styling(bootstrap_options = "condensed")
+```
+```{r, echo = FALSE}
+# Resultados de matrices de confusión de Ranger forest para datos balanceados con upSample
+resultados_rangerup <- table(resultados_confusion_ranger_up)
+knitr::kable(resultados_rangerup, caption="Resultados Ranger forest - upSample") %>% kable_styling(bootstrap_options = "condensed")
+```
+Si se comparan los resultados obtenidos tras el la generación de las matrices de confusión de Ranger forest para el caso de los datos balanceados mediante `downSample` y `upSample` se puede ver que hay claras diferencias en la sensibilidad y especificidad de ambos modelos.
+
+Como se sabe, la sensibilidad es la fracción de verdaderos positivos y la especificidad la fracción de verdaderos negativos. Los resultados obtenidos de ambas matrices de confusión muestran que **el modelo en el caso de los datos balanceados con `downSample` tiene una mayor sensibilidad, es decir, capacidad de identificar a los verdaderos positivos, pero una menor especificidad, es decir, capacidad de distinguir a los verdaderos negativos, que en el caso del modelo con datos balanceados con `upSample`**.
+
+A continuación, se representan las matrices de confusión:
+
+```{r}
+# Matriz de confusión ranger forest con datos balanceados con downSample
+plot_matriz_ranger_down <- ggplot2:::ggplot.default(matriz_confusion_ranger_down, aes(Reference, 
+    Prediction)) + geom_tile(aes(fill = Freq)) + scale_fill_gradient(low = "white", 
+    high = "pink") + theme_bw() + coord_fixed() + geom_text(aes(label = Freq)) + 
+    theme(legend.position = "none", plot.title = element_text(size = 10, 
+        face = "bold")) + ggtitle("RandomForests - downSample")
+
+# Matriz de confusión ranger forest con datos balanceados con upSample
+plot_matriz_ranger_up <- ggplot2:::ggplot.default(matriz_confusion_ranger_up, aes(Reference, 
+    Prediction)) + geom_tile(aes(fill = Freq)) + scale_fill_gradient(low = "white", 
+    high = "pink") + theme_bw() + coord_fixed() + geom_text(aes(label = Freq)) + 
+    theme(legend.position = "none", plot.title = element_text(size = 10, 
+        face = "bold")) + ggtitle("RandomForest - upSample")
+
+grid.arrange(plot_matriz_ranger_down, plot_matriz_ranger_up, ncol = 2)
+```
+
+Como se puede observar, al **comparar la matriz de confusión de Ranger forest con datos balanceados con `downSample` y Ranger forest con datos balanceados con `upSample`**, se puede apreciar que **el modelo en el que se han usado los datos balanceados con `upSample` da unos mejores resultados a nivel general**: predice mucho mejor las regiones NO 3-UTR y tiene menos fallo de predicción en cuanto a predecir 3-UTR cuando en realidad no lo es, aunque generalmente se ve que el modelo de Ranger forest con los datos balanceados con `downSample` predice mejor las regiones sí 3-UTR, como se comentó anteriormente en los resultados de las matrices de confusión.
+
+El siguiente paso a realizar en esta comparación de modelos sería **comparar utilizando la herramienta `resample` los resultados obtenidos en los distintos folds de los modelos**. 
+
+Para realizar esto, se introducen los modelos en la función y se muestran los resultados mediante un gráfico de cajas y bigotes y otro de dispersión:
+
+```{r}
+# Resample para RF con datos balanceados con downSample y upSample
+modelos_rf <- list(RF_down = rangerforest_downSample, RF_up = rangerforest_upSample)
+resample_modelos_rf <- resamples(modelos_rf, quadratic_model = NULL)
+plot1_rf <- bwplot(resample_modelos_rf, main = "Modelos Random forest")
+plot2_rf <- xyplot(resample_modelos_rf)
+
+grid.arrange(plot1_rf, plot2_rf, ncol = 2)
+```
+
+En la primera de las gráficas se puede ver, como se ha dicho, una gráfica de cajas y bigotes en la que se **compara la distribución de la precisión de los modelos Ranger forest con los datos balanceados con `downSample` y con `upSample` y su valor de accuracy y kappa**, siendo este último valor más fiable porque tiene en cuenta la implicación del azar a la hora de realizar la clasificación.
+
+En este caso se puede apreciar que el valor de *kappa* de Ranger forest en el caso en el que se han balanceado los datos con `upSample` posee una menor varianza y unos valores mejores que el caso del Ranger forest que se ha hecho con los datos balanceados con el método de `downSample`. También se puede observar que hay menos dispersión en el caso de Rf_up que en el caso de Rf_down.
+
+Se pasa a observar ahora el gráfico de dispersión de la derecha, que muestra en cada uno de los folds del Random forest qué modelo es el que mejor *accuracy* da. Si los valores quedan por debajo de la diagonal, quiere decir que los resultados de RF usando los datos balanceados con `upSample` tiene unos mejores estadísticos, mientras que si quedan por encima, significará que pasa lo contrario y que los resultados de RF usando los datos balanceados con `downSample` son los que tienen mejores estadísticos.
+
+Analizando el gráfico, se observa que **los valores de del RF en el que se han usado los datos balanceados con `upSample` son los que muestran unos mejores valores estadísticos**.
+
+#### Deep learning con datos downSampleados y upSampleados
+
+Se repite el proceso anterior para el caso de los modelos de Deep learning con los datos balanceados con `downSample` y `upSample`. Primero se utiliza la función `predict` y se generan las matrices de confusión y los resultados de estas matrices:
+
+```{r, warning=FALSE, echo=FALSE}
+Sys.setenv(RETICULATE_PYTHON="/usr/bin/python3.8")
+# Deep learning con datos balanceados con downSample
+prediccion_deep_down <- predict(deeplearning_downSample, datos3UTR_test, type = "raw")
+confusion_deep_down <- confusionMatrix(prediccion_deep_down, datos3UTR_test$class)
+resultados_confusion_deep_down <- as.data.frame(t(confusion_deep_down$byClass))
+matriz_confusion_deep_down <- as.data.frame(confusion_deep_down$table)
+
+# Deep learning con datos balanceados con upSample
+prediccion_deep_up <- predict(deeplearning_upSample, datos3UTR_test, type = "raw")
+confusion_deep_up <- confusionMatrix(prediccion_deep_up, datos3UTR_test$class)
+resultados_confusion_deep_up <- as.data.frame(t(confusion_deep_up$byClass))
+matriz_confusion_deep_up <- as.data.frame(confusion_deep_up$table)
+```
+
+A continuación, se muestran los resultados obtenidos en **las matrices de confusión**:
+
+```{r, echo=FALSE}
+# Resultados de matrices de confusión de Deep learning para datos balanceados con downSample
+resultados_deepdown <- table(resultados_confusion_deep_down)
+knitr::kable(resultados_deepdown, caption="Resultados Deep learning - downSample") %>% kable_styling(bootstrap_options = "condensed")
+```
+
+```{r, echo=FALSE}
+# Resultados de matrices de confusión de Deep learning para datos balanceados con upSample
+resultados_deepup <- table(resultados_confusion_deep_up)
+knitr::kable(resultados_deepup, caption="Resultados Deep learning - upSample") %>% kable_styling(bootstrap_options = "condensed")
+```
+
+Si se comparan los resultados obtenidos tras el la generación de las matrices de confusión de Deep learning para el caso de los datos balanceados mediante `downSample` y `upSample`, se pueden apreciar que no hay casi diferencias entre ambas.
+
+En el caso del modelo de Deep learning con datos balanceados con `downSample`, se obtiene unos valores de sensibilidad y especificidad de 91,2% y 95,6% respectivamente, mientras que en el caso del modelo Deep learning con datos balanceados con `upSample` se obtienen valores de 91,3% y 95,7%.
+
+**En cuanto a valores de sensibilidad y especificidad, es ligeramente mejor el modelo de Deep learning con datos balanceados con `upSample`, encontrando también que la precisión del modelo de este último es también mayor.**
+
+A continuación, se representan las matrices de confusión:
+
+```{r, echo=FALSE}
+# Matriz de confusión deep learning con datos balanceados con downSample
+plot_matriz_deep_down <- ggplot2:::ggplot.default(matriz_confusion_deep_down, aes(Reference, 
+    Prediction)) + geom_tile(aes(fill = Freq)) + scale_fill_gradient(low = "white", 
+    high = "pink") + theme_bw() + coord_fixed() + geom_text(aes(label = Freq)) + 
+    theme(legend.position = "none", plot.title = element_text(size = 10, 
+        face = "bold")) + ggtitle("Deep learning - downSample")
+
+# Matriz de confusión deep learning con datos balanceados con upSample
+plot_matriz_deep_up <- ggplot2:::ggplot.default(matriz_confusion_deep_up, aes(Reference, 
+    Prediction)) + geom_tile(aes(fill = Freq)) + scale_fill_gradient(low = "white", 
+    high = "pink") + theme_bw() + coord_fixed() + geom_text(aes(label = Freq)) + 
+    theme(legend.position = "none", plot.title = element_text(size = 10, 
+        face = "bold")) + ggtitle("Deep learning - upSample")
+
+grid.arrange(plot_matriz_deep_down, plot_matriz_deep_up, ncol = 2)
+```
+
+Al **comparar la matriz de confusión de Deep learning con datos balanceados con `downSample` y Deep learning con datos balanceados con `upSample`**, se puede apreciar que **el modelo en el que se han usado los datos balanceados con `upSample` da unos mejores resultados en todos los aspectos**: predice mejor que el modelo Deep learning con datos `downSample` las regiones sí 3-UTR y no 3-UTR, y tiene menos margen de error al detectar regiones 3-UTR cuando no lo son, así como también falla menos al detectar regiones No 3-UTR cuando en realidad no lo son. 
+
+El siguiente paso sería comparar utilizando la herramienta `resample` los resultados obtenidos en los distintos folds de los modelos. 
+
+Para realizar esto, se introducen los modelos en la función y se muestran los resultados mediante un gráfico de cajas y bigotes y otro de dispersión:
+
+```{r, echo=FALSE}
+# Resample para DL con datos balanceados con downSample y upSample
+modelos_dl <- list(DL_down = deeplearning_downSample, DL_up = deeplearning_upSample)
+resample_modelos_dl <- resamples(modelos_dl, quadratic_model = NULL)
+plot1_dl <- bwplot(resample_modelos_dl, main = "Modelos Deep learning")
+plot2_dl <- xyplot(resample_modelos_dl)
+
+grid.arrange(plot1_dl, plot2_dl, ncol = 2)
+```
+
+En la primera de las gráficas se puede ver una gráfica de cajas y bigotes en la que se **compara la distribución de la precisión de los modelos Deep learning con los datos balanceados con `downSample` y con `upSample` y su valor de accuracy y kappa**, siendo este último valor más fiable porque tiene en cuenta la implicación del azar a la hora de realizar la clasificación.
+
+En este caso se puede apreciar que el valor de *kappa* de Deep learning en el caso en el que se han balanceado los datos con `upSample` posee una menor varianza y unos valores mejores que el caso del Deep learning que se ha hecho con los datos balanceados con el método de `downSample`. También se puede observar que hay menos dispersión en el caso de DL_up que en el caso de DL_down.
+
+Se pasa a observar ahora el gráfico de dispersión de la derecha, que muestra en cada uno de los *folds* del Deep learning qué modelo es el que mejor *accuracy* da. Si los valores quedan por encima de la diagonal, quiere decir que los resultados de DL usando los datos balanceados con `downSample` tiene unos mejores estadísticos, mientras que si quedan por debajo, significará que pasa lo contrario y que los resultados de DL usando los datos balanceados con `upSample` son los que tienen mejores estadísticos.
+
+Analizando el gráfico, se observa que **los valores de del DL en el que se han usado los datos balanceados con `upSample` son los que muestran unos mejores valores estadísticos**.
+
+### Comparación de modelos Ranger forest y Deep learning con datos undersampling
+
+A continuación se va a proceder a comparar los **dos mejores modelos seleccionados: el Ranger forest y el modelo Deep learning generado**, con los datos balanceados mediante el método de downSample.
+
+Previamente, durante el estudio, se implementaron otros modelos que NO dieron los mismos resultados que los expuestos para el caso de Ranger forest y de Deep learning. La generación de estos modelos y sus resultados se puede encontrar en el apartado de **Modelos descartados**
+
+Se va a proceder entonces a comparar estos dos modelos entre sí con el objetivo de concretar cuál de ellos es el mejor modelo de todos los generados con los datos balanceados mediante `downSample`.
+
+Como se ha visto previamente, lo primero que se va a hacer es **usar la función `predict` para predecir nuevos datos, y tras esto, generar las matrices de confusión así como los resultados de dichas matrices de confusión**. 
+
+Los resultados de las matrices de confusión se muestran a continuación:
+
+```{r, echo=FALSE}
+# Resultados de matrices de confusión de Ranger forest para datos balanceados con downSample
+resultados_rangerdown <- table(resultados_confusion_ranger_down)
+knitr::kable(resultados_rangerdown, caption="Resultados Ranger forest - downSample") %>% kable_styling(bootstrap_options = "condensed")
+```
+
+```{r, echo=FALSE}
+# Resultados de matrices de confusión de Deep learning para datos balanceados con downSample
+resultados_deepdown <- table(resultados_confusion_deep_down)
+knitr::kable(resultados_deepdown, caption="Resultados Deep learning - downSample") %>% kable_styling(bootstrap_options = "condensed")
+```
+
+Como se puede comprobar en las tablas expuestas anteriormente, se obtiene, para el caso de los resultados de la matriz de confusión de Ranger forest con datos balanceados con `downSample` una sensibilidad y especificidad del 91,7% y 95,7% respectivamente, mientras que en el caso de los resultados de la matriz de confusión de Deep learning con datos balanceados con `downSample` encontramos valores de sensibilidad y especificidad de 91,2% y 95,6% respectivamente.
+
+**Los resultados son ligeramente mejores en el caso de Ranger forest que en Deep learning, pero la diferencia es muy pequeña**.
+
+A continuación, se muestran las **matrices de confusión** de los dos modelos:
+
+```{r, echo=FALSE}
+# Matriz de confusión Ranger forest con datos balanceados con downSample
+plot_matriz_ranger_down <- ggplot2:::ggplot.default(matriz_confusion_ranger_down, aes(Reference, 
+    Prediction)) + geom_tile(aes(fill = Freq)) + scale_fill_gradient(low = "white", 
+    high = "pink") + theme_bw() + coord_fixed() + geom_text(aes(label = Freq)) + 
+    theme(legend.position = "none", plot.title = element_text(size = 10, 
+        face = "bold")) + ggtitle("RandomForests - downSample")
+
+# Matriz de confusión Deep learning con datos balanceados con downSample
+plot_matriz_deep_down <- ggplot2:::ggplot.default(matriz_confusion_deep_down, aes(Reference, 
+    Prediction)) + geom_tile(aes(fill = Freq)) + scale_fill_gradient(low = "white", 
+    high = "pink") + theme_bw() + coord_fixed() + geom_text(aes(label = Freq)) + 
+    theme(legend.position = "none", plot.title = element_text(size = 10, 
+        face = "bold")) + ggtitle("Deep learning - downSample")
+
+grid.arrange(plot_matriz_ranger_down, plot_matriz_deep_down, ncol = 2)
+```
+
+Como se puede apreciar en las matrices de confusión expuestas anteriormente para el caso del modelo Ranger fores y Deep learning, ambos con los datos balanceados mediante el método `downSample`, se aprecia que **el modelo Ranger forest muestra unos mejores resultados que el Deep learning a la hora de predecir regiones 3-UTR**, así como para predecir regiones que no son 3-UTR.
+
+Además de eso, presenta un menor fallo a la hora de predecir regiones como 3-UTR cuando no lo son, así como también para predecir regiones no 3-UTR cuando no lo son, por lo que en general, **el modelo de Ranger forest predice mejor que el modelo de Deep learning para este estudio particular.**
+
+
+El siguiente paso sería comparar utilizando la herramienta `resample` los resultados obtenidos en los distintos folds de los modelos. 
+
+Para realizar esto, se introducen los modelos en la función y se muestran los resultados mediante un gráfico de cajas y bigotes y otro de dispersión.
+
+```{r, echo=FALSE}
+# Resample de los modelos con datos balanceados con downSample 
+modelos <- list(RF=rangerforest_downSample, 
+                 DL=deeplearning_downSample)
+
+resample_modelos <- resamples(modelos)
+
+plot1 <- bwplot(resample_modelos, main = "RF vs DL")
+plot2 <- xyplot(resample_modelos)
+
+grid.arrange(plot1, plot2, ncol = 2)
+```
+
+En la primera gráfica se puede ver una gráfica de cajas y bigotes en la que se **compara la distribución de la precisión del (Ranger forest) y del modelo DL (Deep learning), ambos con los datos balanceados con `downSample`, y su valor de Accuracy y Kappa**, siendo este último valor más fiable porque tiene en cuenta la implicación del azar a la hora de realizar la clasificación.
+
+En este caso se puede apreciar que el valor de *kappa* de Ranger forest posee una menor varianza y unos valores mejores que el caso del Deep learning. También se puede observar que hay menos dispersión en el caso de RF que en el caso de DL.
+
+Se pasa a observar ahora el gráfico de dispersión de la derecha, que muestra en cada uno de los *folds* qué modelo es el que mejor *accuracy* da. Si los valores quedan por encima de la diagonal, quiere decir que los resultados de Ranger forest tiene unos mejores estadísticos, mientras que si quedan por debajo, significará que pasa lo contrario y que los resultados de Deep learning son los que tienen mejores estadísticos.
+
+Analizando el gráfico, se observa que **los valores de Ranger forest son los que muestran unos mejores valores estadísticos, ya que hay una mayor presencia en la zona en la que están representados**.
+
+
+Tras esto, se va a proceder a obtener los **valores estadísticos que van a permitir analizar si hay diferencias significativas entre el modelos** estudiados previamente. 
+
+Para ello, lo primero que se va a hacer, es comprobar si hay **normalidad en los datos**. Para saber esto se se va a utilizar el *test de Shapiro Wilk*, que tiene como hipótesis nula la normalidad de los datos. Usa los distintos valores de *Kappa*:
+
+```{r}
+# Prueba de Shapiro-Wilk para Ragner forest - downSample
+shapiro.test(resample_modelos$values$`RF~Kappa`)
+```
+
+```{r}
+# Prueba de Shapiro-Wilk para Deep Learning - downSample
+shapiro.test(resample_modelos$values$`DL~Kappa`)
+```
+Como se puede comprobar en ambos casos, se obtiene un p-valor por encima de 0.05, por lo que no **se rechaza la hipótesis nula y se asume la normalidad de los datos** en el caso de Ranger forest y Deep learning con los datos balanceados mediante `downSample`.
+
+Una vez comprobada la normalidad, hay que proceder con la **comprobación de la homocedasticidad** (homogeneidad de las varianzas). Para ello se cuenta con dos test: el *test de Levene* y el *test de Bartlett*. 
+
+Este último es más recomendable en caso de que se pueda asumir la normalidad, como pasa en este estudio:
+
+```{r}
+# Prueba de homogeneidad de las varianzas para el caso de RF y DL - downSample
+datos <- stack(list(rf=resample_modelos$values$`RF~Kappa`,dl=resample_modelos$values$`DL~Kappa`))
+test.barlett <- bartlett.test(values ~ ind, data = datos)
+test.barlett
+```
+
+Como se puede comprobar, el p-valor obtenido es superior a 0.05, por lo que no se rechaza la hipótesis nula y se asume **la homogeneidad de las varianzas en el caso de Ranger forest y Deep learning con los datos balanceados mediante `downSample`**.
+
+Una vez comprobada la normalidad de los datos y la homogeneidad de las varianzas, se puede realizar el test `diff`, que permite comparar las medias de muestras apareadas. 
+
+Esta función `diff` aplica por defecto la prueba T de Student pareada con ajuste de *Bonferroni* y determina si las diferencias detectadas entre los modelos son estadísticamente significativas. Es por esto que se necesita comprobar previamente la normalidad de los datos y la homogeneidad de las varianzas
+
+`Diff` utiliza como parámetros de entrada los datos del resample, y hay que especificar que no se quiere que se haga ningún ajuste o modificación sobre los mismos (`adjustment = "none"`). 
+
+```{r}
+# Se aplica la función `diff` sobre el resample resultante de los modelos Ranger forest y Deep learning
+diffValues <- diff(resample_modelos, adjustment = "none")
+
+# Summary de estadísticas resultantes
+summary(diffValues)
+```
+En los resultados de esta función `diff`, los valores que hay por encima de la diagonal expresan la diferencia de las medias en valor absoluto, mientras que los valores por debajo de la diagonal indican el p-valor de que esta diferencia sea significativa.
+
+Como se puede comprobar en los resultados, la diferencia de la media de *kappa* de los modelos de Ranger forest y de Deep learning es de 0.007902, y el p-valor de esta diferencia es de 0.01902. Al ser este p-valor menor de 0.05 se puede determinar que **sí que hay diferencias significativas entre ambos modelos**.
+
+**Se rechaza entonces la hipótesis nula de que la diferencias de las medias es cero tanto para el *Accuracy* como el *Kappa*, por lo que se determina que las diferencias apreciadas son significativas, indicando que el clasificador Ranger Forest es el mejor de los dos para predecir en este estudio y con los datos presentes en el mismo**.
+
+A continuación se muestra gráficamente esta diferencia significativa entre ambos modelos:
+
+```{r}
+# Levelplot para diferencias significativas entre RF vs DL - downSample
+levelplot(diffValues, what="diferences", main="Diferencias significativas entre RF y DL")
+```
+
+En la representación gráfica anterior se puede comprobar que **al enfrente los valores de *Accuracy* de los modelos Ranger forest y Deep learning se obtienen diferencias significativas entre ambos modelos**, ya que si no existieran, el gráfico adoptaría, al enfrentar los modelos, una tonalidad blanca, que simboliza el cero en el *levelplot* e implicaría la no existencia de diferencias significativas entre los dos modelos.
+
+Sin embargo, adquiere una tonalidad rosácea de la que se puede extraer que las diferencias sí son significativas.
+
+## Features/predictores más relevantes en el estudio
+
+Una vez se ha determinado cuál es el mejor modelo de entre los especificados en el estudio, se puede proceder a la comprobación de cuáles son los predictores más importantes para la predicción de las regiones 3-UTR en este estudio particular y para estos datos.
+
+El mejor modelo de los estudiados es Ranger forest, **pero en el modelo Ranger forest generado en este estudio NO es posible identificar cuáles son los predictores más importantes**. En el modelo en el que **sí resulta posible es en el de `rf`**. 
+
+Se ha seleccionado este modelo debido a que presenta unos resultados muy similares a los obtenidos para el caso de Ranger forest, con una accuracy de 93,9% y un valor de kappa de 87,9%, siendo este modelo el mejor, junto a SVM, de los modelos descartados que se probaron al realizar el estudio.
+
+```{r}
+# Resultados de Random forest `rf` para datos balanceados con - downSample
+rf_downSample <- readRDS("./rf_downSample")
+rf_downSample
+```
+
+Se procede ahora a mostrar los predictores más importantes para el modelo de `rf` realizado con los datos balanceados mediante `downSample`.
+
+```{r}
+# Predictores más importantes en Random forest - downSample
+varImp(rf_downSample)
+```
+
+Como se puede comprobar, los predictores más importantes para este estudio son `polyA_signal1`, `meanPd`, `meanEE` y `mean_phastCons7way`.
+
+En el apartado de *Discusión* se pasará a observar cada uno de estos predictores y a comprobar si se puede extraer alguna explicación del por qué de su implicación biológica a la hora de identificar regiones 3-UTR.
+
+## Modelos descartados
+
+A continuación se muestran una serie de modelos que se implementaron pero que se descartaron por dar unos peores resultados que los seleccionados para la comparación de modelos.
+
+### rf
+
+Se procedió a realizar un Random forest usando el algoritmo `rf` de `Caret`. 
+
+A continuación se muestra información de este algoritmo.
+
+```{r}
+# Información sobre algoritmo `rf`
+getModelInfo("rf")$rf$grid
+```
+Como se puede comprobar, este algoritmo sólo permite la modificación del parámetro `mtry`.
+
+```{r}
+# Parámetros que requiere un rf
+rf <- table(modelLookup("rf"))
+knitr::kable(rf, caption="Hiperparámetros que requiere un rf") %>% kable_styling(bootstrap_options = "condensed")
+```
+
+Se decidió implementar el mismo algoritmo que en el caso de Ranger forest, es decir, los mismos ajustes, sólo variando el método utilizado a `rf`.
+
+```{r}
+# Rf con datos balanceados mediante downSample
+set.seed(123)
+random_forest_control <- trainControl(method = "cv", number = 10, 
+                                      returnResamp = "final", verboseIter = T, allowParallel = T)
+
+set.seed(123)
+if (file.exists("rf_downSample")) {
+  rf_downSample <- readRDS("rf_downSample")
+} else {
+  rf_downSample <- caret::train(Class ~ ., data = datos3UTRtrain_down, method = "rf", tuneLength = 10, trControl = random_forest_control)
+  saveRDS(rf_downSample, "rf_downSample")
+}
+```
+
+```{r}
+# Resultados de rf para datos balanceados mediante downSample
+rf_downSample
+```
+
+```{r}
+# Predictores importantes para el modelo rf con datos balanceados con downSampl
+var_imp <- varImp(rf_downSample)
+```
+
+Este modelo permite comprobar cuáles son los predictores más importantes para predecir.
+
+Como se puede apreciar, los resultados son ligeramente peores que en el caso de `Ranger forest`. Esto es esperable, ya que este algoritmo de `rf` sólo permite la especificación de un único hiperparámetro, y presenta un menor nivel de complejidad que en el caso de Ranger forest.
+
+### mlpKerasDropout con "boot"
+
+Se decidió probar a generar un modelo de Deep learning usando también el algoritmo de `mlpKerasDropout` pero usando el método "boot". Se utiliza para aproximar la distribución en el muestreo de un estadístico. Se usa frecuentemente para aproximar el sesgo o la varianza de un análisis estadístico [@little2019causal].
+
+Esta función utiliza *Dropout* para evitar el *overfitting* del modelo, ya que este fenómeno dificulta la precisión y el rendimiento del modelo. Se dice que un modelo estadístico está sobreajustado cuando se le entrena con muchos datos. Cuando un modelo se entrena con muchos datos, comienza a aprender del ruido y las entradas de datos inexactas en el conjunto de datos. Esto provoca que el modelo no categorice los datos correctamente, debido a demasiados detalles y ruido [@ying2019overview].
+
+Esta función va a ir eliminando de forma aleatoria determinados nodos en cada uno de los distintos pasos, estudiando su efecto en el resultado final, por lo que gracias a ello no se va a producir el fenómeno de sobreajuste expuesto con anterioridad.
+
+```{r}
+Sys.setenv(RETICULATE_PYTHON="/usr/bin/python3.8")
+set.seed(123)
+
+deep_learning_control = trainControl(method="boot",
+                       number=10,
+                       search = "grid",
+                       classProbs = T)
+
+mygrid = expand.grid(size = 12, 
+                     dropout = 0.1, 
+                     batch_size = 5,
+                     lr = (0.5*1e-2),
+                     rho = 0,
+                     decay = 0,
+                     activation = "relu")
+
+if (file.exists("deeplearning_downSample")) {
+    deeplearning_downSample <- readRDS("deeplearning_downSample")
+} else {
+    deeplearning_downSample <- caret::train(Class ~ ., data = datos3UTRtrain_down, preProcess=c("scale","center"), 
+        tuneGrid=mygrid, trControl=deep_learning_control, method="mlpKerasDropout", epochs=10)
+    saveRDS(deeplearning_downSample, "deeplearning_downSample")
+}
+```
+
+```{r}
+# Resultados para deep learning con método boot
+print(deeplearning_downSample)
+```
+
+Aunque da los mismos resultados que el modelo de Deep learning escogido, que es el que usó el método de `cv`, se decidió implementar este último para permitir una mejor comparación en el resampleo de los datos, por lo que este se descartó.
+
+### nb
+
+El **algoritmo de Naive Bayes** calcula las probabilidades condicionales de que una observación pertenezca a cada una de las clases dados siempre unos valores de los predictores [@lewis1998naive]. El término naive asume que las variables son independientes, es decir, que el valor que toman no está influenciado por las variables. Aunque en la práctica es difícil que se de esto, este algoritmo permite calcular la probabilidad cuando hay múltiples predictores multiplicando las probabilidades individuales de cada uno (regla de eventos independientes)[@lewis1998naive].
+
+Este algoritmo de Naive Bayes se puede implementar con la función `nb` de `Caret`. 
+
+Se procede a presentar información sobre este algoritmo, el cómo se implementa y sus valores por defecto:
+
+```{r}
+# Información sobre algoritmo `nb`
+getModelInfo("nb")$nb$grid
+```
+
+Como se ve en la ejecución anterior, los valores por defecto de los parámetros del algoritmo son: `usekernel = c(TRUE, FALSE)`, `fL = 0`, `adjust = 1`.
+
+Este algoritmo de Naive Bayes tiene tres hiperparámetros:
+
+```{r}
+# Hiperparámetros para el algoritmo `nb` de Naive Bayes
+nb <- getModelInfo("nb")
+knitr::kable(nb$nb$parameters, caption="Hiperparámetros para el algoritmo `nb` de Naive Bayes") %>% 
+  kable_styling(bootstrap_options = "condensed")
+```
+
+
+* `usekernel`: utiliza TRUE para emplear un *kernel* que estime la densidad o FALSE para asumir una distribución de densidad gaussiana.
+* `fL`: factor de corrección de Laplace. Se usará 0 en caso de no aplicar ninguna corrección.
+* `adjust`: parámetro pasado a la función density si `usekernel = TRUE`.
+
+Se hizo uso de nuevo de `tuneGrid` para la especificación de los parámetros. En este caso, tras algunas pruebas, se decidió que el mejor modelo se obtenía aplicando los valores por defecto de los hiperparámetros.
+
+Se hará uso del método `cv` como se hizo anteriormente con otros modelos. También se especificará que tome como métrica `metric = "Accuracy"`.
+
+```{r}
+# Naive Bayes con datos balanceados con downSample
+set.seed(123)
+
+hiperparametros <- data.frame(usekernel = FALSE, fL = 0 , adjust = 0)
+
+naive_bayes_control_train <- trainControl(method = "cv", number = 10,
+                              returnResamp = "final", verboseIter = FALSE,
+                              allowParallel = TRUE)
+
+set.seed(123)
+if (file.exists("naive_bayes_downSample")) {
+  naive_bayes_downSample <- readRDS("naive_bayes_downSample")
+} else {
+  naive_bayes_downSample <- caret::train(Class ~ ., data = datos3UTRtrain_down, method = "nb", 
+                                       tuneGrid = hiperparametros, trControl = naive_bayes_control_train)
+  saveRDS(naive_bayes_downSample, "naive_bayes_downSample")
+}
+
+# Resultados:
+naive_bayes_downSample
+```
+
+```{r}
+# Resultados de Naive Bayes para datos balanceados con downSample
+naivebayes_down_resultados <- table(naive_bayes_downSample$results)
+
+knitr::kable(naivebayes_down_resultados, caption="Resultados de Naive Bayes con datos balanceados con downSample") %>% kable_styling(bootstrap_options = "condensed")
+```
+
+Empleando un modelo Naive Bayes con `usekernel = FALSE`, `fL = 0`, `adjust = 0`, se consigue un *accuracy* promedio de **validación del 89%** para el caso de los datos balanceados mediante downSample. El valor de *kappa* alcanzado sería de un 79%.
+
+En general este algoritmo presenta peores valores de *accuracy* que los modelos de Ranger forest y de Deep learning, por lo que se decidió no compararlo entre estos anteriores, aunque resultó interesante probar este modelo para comprobar los valores que reflejaba.
+
+### regLogistic
+
+Se procedió a realizar un modelo de **Regresión logística**, usando la función `regLogistic` de `Caret`.
+
+A continuación se procede a mostrar información de este algoritmo, cómo se implementa y los valores de sus hiperparámetros por defecto:
+
+```{r}
+# Información sobre algoritmo `regLogistic`
+getModelInfo("regLogistic")$regLogistic$grid
+```
+
+Como se puede apreciar en la ejecución anterior, se muestran los valores por defecto que toman los hiperparámetros de este algoritmo, así como la forma de implementación del mismo: `(cost = 2^((1:len) - ceiling(len * 0.5)), loss = c("L1", "L2_dual", "L2_primal"), epsilon = signif(0.01 * (10^((1:len) - ceiling(len * 0.5))), 2))`
+
+A continuación se muestran los hiperparámetros que posee dicho algoritmo:
+
+```{r}
+# Hiperparámetros para algoritmo `regLogistic` de Regresión logística
+regLogistic <- getModelInfo("regLogistic")
+knitr::kable(regLogistic$regLogistic$parameters, caption="Hiperparámetros para el algoritmo `regLogistic` de Regresión logística") %>% kable_styling(bootstrap_options = "condensed")
+```
+
+Como se puede apreciar, dos de ellos son numéricos y uno es de tipo *character* o caracter.
+
+* `cost`: cuantifica el error entre los valores predichos y los valores esperados.
+* `loss`: registro de probabilidades predichas corregidas para cada instancia.
+* `epsilon`: tolerancia registrada.
+
+En este caso se hizo uso de nuevo del parámetro `tuneLength`=10 con el objetivo de generar los modelos y que finalmente se seleccionara el mejor, por lo que en este caso no se realizaron manualmente modificaciones de los hiperparámetros.
+
+De nuevo se utilizará el método de `cv` con un número de 10. Se hará uso de la función `tuneLength` con un valor igual a 10, como se hizo en los modelos de Ranger forest.
+
+```{r}
+# Regresión logística con datos balanceados con downSample
+set.seed(123)
+
+regresion_logistica_control_train  <- trainControl(method = "cv", number = 10,
+                                                   returnResamp = "final", verboseIter = FALSE,
+                                                   allowParallel = TRUE)
+
+if (file.exists("reg_log_downSample")) {
+  reg_log_downSample <- readRDS("reg_log_downSample")
+} else {
+  reg_log_downSample <- caret::train(Class ~ ., data = datos3UTRtrain_down, method = "regLogistic", 
+                                                 tuneLength = 10, trControl = regresion_logistica_control_train)
+  saveRDS(reg_log_downSample, "reg_log_downSample")
+}
+
+# Resultados
+reg_log_downSample
+```
+
+A continuación se muestran los mejores resultados de los hiperparámetros para el caso de la regresión logística con datos balanceados con downSample:
+
+```{r}
+# Resultados de reg logística para datos balanceados con downSample 
+reg_log_down_resultados <- table(reg_log_downSample$bestTune)
+
+knitr::kable(reg_log_down_resultados, caption="Resultados de Reg Logística con datos balanceados con downSample") %>% kable_styling(bootstrap_options = "condensed")
+```
+
+A continuación se muestran los valores de *Accuracy* y *Kappa* del mejor modelo obtenido y el modelo final:
+
+```{r}
+# Mejor resultado obtenido
+reg_logistica_mejor <- table(reg_log_downSample$results[1,])
+knitr::kable(reg_logistica_mejor, caption="Mejor resultado de Reg Logística con datos balanceados con downSample") %>% kable_styling(bootstrap_options = "condensed")
+```
+
+```{r}
+# Modelo final de regLogistic 
+reg_log_downSample$finalModel
+```
+
+Como se puede apreciar, se obtiene una *Accuracy* del 93% y un valor de *Kappa* del 86%, por lo que da unos muy buenos resultados para el caso de los datos balanceados con downSample. 
+
+En cuanto al modelo final, el mejor ajuste de los hiperparámetros para el mejor modelo es: `cost = 32`, `loss = L1` Y `epsilon = 1e-06`.
+
+Aunque el modelo da muy buenos resultados, sigue siendo inferior al modelo tanto de Ranger forest como de Deep learning y por eso se decidió no compararlo con estos últimos.
+
+### SVM
+
+El método de **Máquina de Vector Soporte** o algoritmo `svmRadial` de `Caret` permiten encontrar la forma óptima de clasificar entre varias clases. La clasificación óptima se realiza maximizando el margen de separación entre las clases. Los vectores que definen el borde de esta separación son los vectores de soporte [@utkin2019imprecise]. 
+
+A continuación se procede a mostrar información de este algoritmo, cómo se implementa y los valores de sus hiperparámetros por defecto:
+
+```{r}
+# Información sobre algoritmo `regLogistic`
+getModelInfo("svmRadial")$svmRadial$grid
+```
+Como se puede apreciar en la ejecución anterior, se muestran los valores por defecto que toman los hiperparámetros de este algoritmo ((`sigma = mean(as.vector(sigmas[-2])), C = 2^((1:len) - 3`)) así como la forma de implementación del mismo.
+
+Posee 2 hiperparámetros:
+
+* `sigma`: coeficiente del kernel radial.
+* `C`: penalización por violaciones del margen del hiperplano.
+
+```{r}
+# Hiperparámetros del algoritmo `svmRadial` de Máquina de Vector Soporte
+maquina_vectores_info <- getModelInfo("svmRadial")
+knitr::kable(maquina_vectores_info$svmRadial$parameters, caption="Hiperparámetros del algoritmo `svmRadial` de Máquina de Vector Soporte") %>% kable_styling(bootstrap_options = "condensed")
+```
+
+Se utilizará el método `cv` como se ha hecho en todos los modelos anteriores y se especificará un valor de `tuneLength` = 10, como se hizo previamente en el modelo anterior. También se especificará que tome como métrica "*Accuracy*":
+
+```{r}
+# SVM con datos balanceados con downSample
+cl <- makeCluster(5)
+registerDoParallel(cl)
+
+set.seed(123)
+
+svm_control_train <- trainControl(method = "cv", number = 10,
+                              returnResamp = "final", verboseIter = FALSE,
+                              allowParallel = TRUE)
+
+set.seed(123)
+if (file.exists("svm_downSample")) {
+  svm_downSample <- readRDS("svm_downSample")
+} else {
+  svm_downSample <- caret::train(Class ~ ., data = datos3UTRtrain_down, method = "svmRadial", 
+                                       tuneLength = 5, metric = "Accuracy", trControl = svm_control_train)
+  saveRDS(svm_downSample, "svm_downSample")
+}
+
+# Resultados:
+svm_downSample
+```
+
+A continuación se va a proceder a visualizar el modelo final para el caso de SVM con datos balanceados con downSample, tanto estadísticamente como gráficamente:
+
+```{r}
+# Modelo final de SVM para datos balanceados con downSample 
+svm_downSample$finalModel
+```
+
+```{r}
+# Representación gráfica del modelo SVM para datos balanceados con downSample
+ggplot(svm_downSample, highlight = TRUE) +
+  labs(title = "Evolución del accuracy del modelo SVM para datos balanceados con downSample") +
+  theme_classic()
+```
+
+Como se puede apreciar, se obtiene una *Accuracy* del 94% y un valor de *Kappa* del 88%, por lo que da unos muy buenos resultados para el caso de los datos balanceados con downSample. 
+
+En cuanto al modelo final, el mejor ajuste de los hiperparámetros para el mejor modelo es: `sigma = 0.0383442930737722` y `C = 4`.
+
+Aunque este es de los modelos descartados el que mejor valor de accuracy posee junto a `rf`, sigue siendo mejor lo reflejado en el Ranger forest y en el Deep learning, por lo que se decidió descartarlo y no proceder a su comparación.
+
+# Discusión
+
+## Comparación Ranger forest y deep learning usando datos balanceados con `downSample` y `upSample`
+
+De la comparación de los modelos Ranger forest (algoritmo `ranger`) y Deep learning usando el algoritmo `mlpKerasDropout` usando los métodos de balanceo de datos `downSample` y `upSample` se puede extraer que, **en este caso particular y en este estudio, los modelos dan unos mejores resultados si se utiliza para balancear los datos la estrategia de `upSample`, es decir, equiparar la clase minoritaria a la mayoritaria,** consiguiéndose un mayor número de muestras.
+
+Dependiendo del tipo de estudio y de los datos que ofrezca el mismo, será conveniente seguir una estrategia de balanceo u otra, pero esa es una decisión que el autor del estudio debe tomar de forma temprana, por lo que hay que asumir en ocasiones que quizá el proceso no esté del todo optimizado.
+
+En este caso se decidió implementar los modelos de Ranger forest y Deep learning con los dos tipos de datos balanceados, con estos dos tipos de estrategia, y el resto de modelos sólo con la estrategia de balanceo `downSample`, ya que se consideró que debido a la reducción del tiempo de cómputo que se produce al verse reducidas drásticamente las muestras, y a que los resultados no parecen ser sustancialmente peores siguiendo esta estrategia de balanceo, merecía la pena probar el resto de los modelos usando esta estrategia.
+
+## Comparación de Ranger forest y deep learning usando datos balanceados `downSample`
+
+De la comparación de los modelos Ranger forest (algoritmo `ranger`) y Deep learning usando el algoritmo `mlpKerasDropout` usando los métodos de balanceo de datos `downSample` se extrae que **el mejor modelo para predecir regiones 3-UTR es el Ranger forest para los datos de este estuduo y este caso particular**.
+
+Este modelo resulta muy bueno discriminando regiones 3-UTR de las regiones que no lo son, y es el que mejores resultados ha dado de todos los modelos implementados en este estudio.
+
+## Predictores importantes para la identificación de regiones 3'UTR
+
+En los datos del estudio se contaba con una serie de predictores que iban a ayudar a la identificación de las regiones 3'UTR y a identificar aquellas que no lo son.
+
+A priori, desde el punto de vista biológico, se podía preveer que algunos de estos predictores iban a ser importantes en su identificación, como es el predictor señal polyA. Este predictor resulta importante porque está seguido de de las regiones 3'UTR en el genoma, como se ve en la Figura a continuación, por lo que era de suponer que iba a tener una gran implicación en la detección de estas regiones y en la diferenciación de las mismas de las que no son regiones 3'UTR.
+
+Puesto que los sitios polyA están presentes al final de las regiones 3'UTR, las 3'UTR no anotadas cuando sí deberían haberse anotado deben superponerse o estar cerca de estos sitios polyA.
+
+![Estructura típica del mRNA humano](figura2.png)
+
+Tras la **comprobación de la implicación de los predictores en su importancia a la hora de discernir regiones 3-UTR de las que no lo son**, se encontró que los predictores más importantes en este caso particular y con estos datos son: `polyA_signal1`, `meanPd`, `meanEE` y `mean_phastCons7way` para el modelo de `rf`, un modelo con resultados casi idénticos que el `ranger`, que resultó ser el mejor modelo para predecir en este estudio.
+
+Es de esperar que la PRESENCIA de la secuencia poliA (por eso se refleja un "1" en el nombre del predictor, para determinar su presencia) se encuentre en la primera posición en cuanto a predictores más importantes para identificar regiones 3-UTR por la posición que ocupa esta secuencia y lo que se ha explicado previamente. Esto explica el por qué de su valor tan alto de predicción para las regiones 3-UTR (100%). 
+
+Tras `polyA_signal1`, se encuentran `meanPD` y `meanEE` como los predictores más importantes, por lo que se puede decir que el modelo usa estas características genómicas y transcriptómicas para clasificar las regiones 3'UTR [@sethi2021leveraging].
+
+El cuarto mejor predictor es `mean_phastCons7way`, la media de la estimación de la probabilidad de que cada nucleótido pertenezca a un elemento conservado, basándose en el alineamiento múltiple, y en un complejo terciario, en este caso.
+
+# Conclusiones
+
+* Es posible identificar regiones 3-UTR en el genoma humano con la implementación de los modelos comparados en el estudio.
+* Todos los modelos implementados en este estudio han logrado un muy buen resultado en la predicción de regiones 3-UTR y en discernir aquellas que no lo son, pero los modelos más destacados son los modelos basados en árboles de decisión.
+* Los datos del estudio y el preprocesamiento de los datos ha hecho posible que de los resultados de los modelos se obtengan valores muy buenos de precisión y de predicción.
+* Las *features* o características más relevantes de los datos del estudio a la hora de indentificar regiones 3-UTR tienen implicaciones biológicas que corresponden a la realidad teórica.
+
 
 # Referencias 
